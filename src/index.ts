@@ -33,6 +33,22 @@ app.get("/", (c) =>
 
 app.get("/presets", (c) => c.json(REGION_PRESETS));
 
+/**
+ * Binding diagnostics. Reveals NO key characters — only enough to tell whether
+ * ATLAS_API_KEY actually reached the running Worker and is well-formed. Safe to
+ * leave public; remove once the deployment is confirmed healthy.
+ */
+app.get("/debug", (c) => {
+  const k = c.env.ATLAS_API_KEY ?? "";
+  return c.json({
+    keyPresent: k.length > 0,
+    keyLength: k.length,
+    looksLikeUuid: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k),
+    hasStrayWhitespace: k !== k.trim(),
+    apiTokenGate: Boolean(c.env.API_TOKEN),
+  });
+});
+
 interface ProbeBody {
   domain?: string;
   queryType?: string;
