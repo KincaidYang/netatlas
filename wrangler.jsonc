@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "netatlas",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "observability": { "enabled": true }
+  // Secrets (set with `wrangler secret put <NAME>`, do NOT put them here):
+  //   ATLAS_API_KEY  — RIPE Atlas API key with credits (required)
+  //   API_TOKEN      — optional bearer token; if set, callers must send
+  //                    `Authorization: Bearer <API_TOKEN>` to protect your credits
+}

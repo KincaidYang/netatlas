@@ -1,0 +1,4 @@
+# Copy to `.dev.vars` for `wrangler dev`. Never commit `.dev.vars`.
+ATLAS_API_KEY="your-ripe-atlas-api-key"
+# Optional: protect the API so randoms can't burn your Atlas credits.
+# API_TOKEN="some-long-random-string"
