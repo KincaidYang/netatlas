@@ -63,3 +63,14 @@ src/types.ts      Env + Atlas response shapes
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run deploy` — `wrangler deploy` (set secrets first: `wrangler secret put ATLAS_API_KEY`)
 - Tests: none yet. When adding, `parseDnsAnswers` (feed it captured base64 abufs) and `aggregate` are the pure, high-value units to cover.
+
+## Deployment & the ATLAS_API_KEY secret (hard-won)
+
+This repo deploys via **Workers Builds CI** (push to `main` → `wrangler deploy`). `ATLAS_API_KEY` **must be a runtime Worker secret** — set it with `wrangler secret put ATLAS_API_KEY` (writes straight to the Worker; preserved across `wrangler deploy`, so CI rebuilds keep it).
+
+Do **not** provide the key as either of these — both produce `401 "key does not exist"` at runtime, and we burned real time on both:
+
+- **Plaintext Variable** in the dashboard → wiped on the next CI `wrangler deploy` (config has no `vars`, so wrangler removes it; shows up as a "deleted variable: ATLAS_API_KEY" deployment).
+- **Workers Builds *build* variable** (Settings → Builds) → only exists during the build step, never at runtime, so `c.env.ATLAS_API_KEY` is always empty.
+
+Diagnosing: a temporary `GET /debug` returning `{ keyPresent, keyLength, looksLikeUuid, hasStrayWhitespace }` (no key chars) is the fastest way to tell whether the binding actually reached the runtime. `wrangler secret list --name netatlas` and `wrangler deployments list --name netatlas` confirm what's really on the Worker.

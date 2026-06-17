@@ -17,6 +17,21 @@ npx wrangler secret put API_TOKEN         # optional bearer gate (recommended)
 npm run deploy
 ```
 
+### ⚠️ Setting `ATLAS_API_KEY` correctly (read this)
+
+It **must be a runtime Worker secret**. Two common ways to get this wrong:
+
+- **A plaintext Variable** (dashboard → Variables and Secrets → *Variable*): if you deploy via CI (`wrangler deploy`), it gets **wiped** on the next deploy, because `wrangler.jsonc` declares no `vars` and the config is treated as the source of truth for plaintext vars. (Symptom: a deployment titled "deleted variable: ATLAS_API_KEY".)
+- **A Workers Builds *build* variable** (dashboard → Settings → Builds): only available during `npm install` / `wrangler deploy`, **never at runtime** — so `c.env.ATLAS_API_KEY` is always empty and Atlas returns `401 "key does not exist"`.
+
+✅ Correct: a runtime **Secret**. Easiest and CI-safe:
+
+```bash
+npx wrangler secret put ATLAS_API_KEY      # writes directly to the Worker
+```
+
+Secrets are **preserved across `wrangler deploy`**, so CI rebuilds won't clobber it. (You can also add it as a *Secret* — not Variable, not build var — in the dashboard, then click **Deploy** to publish a version with it.)
+
 ## API
 
 ### `POST /probe` — create a measurement (async)
