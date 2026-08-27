@@ -137,12 +137,56 @@ describe("http.parseRow", () => {
 });
 
 describe("ntp.parseRow", () => {
-  it("averages the replies and keeps the clock offset", async () => {
-    const out = await ntp.parseRow(
-      row({ stratum: 2, version: 4, mode: "server", "root-delay": 0.01, result: [{ rtt: 10, offset: -1.5 }, { rtt: 20, offset: -2.5 }] }),
-    );
-    expect(out).toMatchObject({ ok: true, rttMs: 15 });
-    expect(out.detail).toMatchObject({ stratum: 2, version: 4, mode: "server", offsetMs: -2 });
+  /**
+   * A real row, verbatim from measurement 205218024. NTP reports seconds
+   * where every other type reports milliseconds — `ref-ts` minus the NTP
+   * epoch is exactly this row's unix `timestamp`, which is what settles it.
+   */
+  const REAL = {
+    "root-delay": 0.0244751,
+    "root-dispersion": 0.00297546,
+    "ref-id": "516816e5",
+    "ref-ts": 3996813481.0639367,
+    timestamp: 1787824681,
+    li: "no",
+    version: 4,
+    mode: "server",
+    stratum: 2,
+    dst_addr: "172.233.38.176",
+    result: [
+      { "origin-ts": 3996813481.700527, "receive-ts": 3996813481.707325, "transmit-ts": 3996813481.707352, "final-ts": 3996813481.7242227, rtt: 0.023669, offset: 0.005036 },
+      { rtt: 0.023482, offset: 0.004977 },
+      { rtt: 0.023485, offset: 0.00498 },
+    ],
+  };
+
+  it("converts seconds to milliseconds", async () => {
+    const out = await ntp.parseRow(row(REAL));
+    // 0.0236 s is 23.6 ms of network. Read as milliseconds it would be 23 µs,
+    // which no internet path can do — that was the bug.
+    expect(out.rttMs).toBeCloseTo(23.545, 3);
+    expect(out.detail.offsetMs).toBeCloseTo(4.998, 3);
+    expect(out.detail.rootDelay).toBe(24.475);
+    expect(out.detail.rootDispersion).toBe(2.975);
+  });
+
+  it("keeps microsecond resolution instead of rounding before scaling", async () => {
+    // Rounding to three decimals first turned 0.023669 s into 24 ms.
+    const out = await ntp.parseRow(row({ ...REAL, result: [{ rtt: 0.023669, offset: 0 }] }));
+    expect(out.rttMs).toBe(23.669);
+  });
+
+  it("reads the server's own description of itself", async () => {
+    const out = await ntp.parseRow(row(REAL));
+    expect(out).toMatchObject({ ok: true });
+    expect(out.detail).toMatchObject({
+      stratum: 2,
+      version: 4,
+      mode: "server",
+      leapIndicator: "no",
+      refId: "516816e5",
+      dstAddr: "172.233.38.176",
+    });
   });
 
   it("is not ok when nothing replied", async () => {

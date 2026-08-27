@@ -97,6 +97,13 @@ Gotchas already paid for:
 - **sslcert needs SNI.** Without `hostname`, shared-hosting and CDN endpoints
   return a fallback certificate that reads as long-expired — a completely wrong
   verdict. It defaults to the target unless the target is an IP literal.
+- **ntp reports seconds, everything else reports milliseconds.** `rtt`,
+  `offset`, `root-delay`, `root-dispersion` and every `*-ts` in an ntp row are
+  seconds. Proof from the row itself: `ref-ts` − 2208988800 (the NTP epoch)
+  equals that row's own unix `timestamp`, and `rtt` is
+  (final-ts − origin-ts) − (transmit-ts − receive-ts) over the same fields.
+  Convert with `secToMs` in `src/measurements/ntp.ts`, and convert *before*
+  rounding — three decimals first turns 0.023669 s into 24 ms, not 23.669.
 - **ping reports `-1`** for min/avg/max when nothing came back. That is "no
   measurement", not a negative RTT.
 - **`resolve_on_probe: true` is not the default.** Without it Atlas resolves
