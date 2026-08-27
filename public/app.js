@@ -396,20 +396,25 @@ function sheet(group) {
   return (
     `<article class="sheet ${failed ? "fail" : "done"}">` +
     `<header><span class="node">${esc(group.label)}</span>` +
-    `${asn ? `<span class="asn">AS${asn}</span>` : ""}` +
+    `${asn ? `<span class="asn">AS${esc(asn)}</span>` : ""}` +
     `<span class="stamp${partial ? " err" : ""}">${group.responded}/${group.requested} 探针</span></header>` +
     `<div class="body">${group.probes.map((p) => probeBody(p, group.probes.length > 1)).join("")}</div></article>`
   );
 }
 
 function probeBody(p, labelled) {
-  const tag = labelled ? `<div class="pid">探针 #${p.probeId}${p.from ? ` · ${esc(p.from)}` : ""}</div>` : "";
+  const tag = labelled ? `<div class="pid">探针 #${esc(p.probeId)}${p.from ? ` · ${esc(p.from)}` : ""}</div>` : "";
   if (p.error && !p.ok && Object.keys(p.detail || {}).length === 0) {
     return `<div class="probe">${tag}<span class="stamp err">${esc(p.error)}</span></div>`;
   }
   const d = p.detail || {};
   const rows = [];
-  const add = (k, v) => v != null && v !== "" && rows.push([k, v]);
+  // Everything below comes from a measured host: DNS records, certificate
+  // subjects, hostnames. A TXT record or a CN is attacker-controlled, and this
+  // page renders measurements other people created and shared, so values are
+  // escaped here and only `addHtml` may introduce markup.
+  const add = (k, v) => v != null && v !== "" && rows.push([k, esc(v)]);
+  const addHtml = (k, html) => html && rows.push([k, html]);
 
   if (d.sent != null) {
     add("延迟", `${ms(d.min)} / ${ms(d.avg)} / ${ms(d.max)}`);
@@ -429,15 +434,15 @@ function probeBody(p, labelled) {
   }
   if (d.subjectCN) {
     add("证书", d.subjectCN);
-    add("签发", `${d.issuerO ?? d.issuerCN ?? "?"}`);
+    add("签发", d.issuerO ?? d.issuerCN ?? "?");
     add("到期", `${(d.notAfter || "").slice(0, 10)}${d.daysLeft != null ? ` · 剩 ${d.daysLeft} 天` : ""}`);
     add("指纹", d.fingerprint ? `${d.fingerprint.slice(0, 24)}…` : null);
   }
   if (Array.isArray(d.answers) && d.answers.length) {
-    add("解析", d.answers.map((a) => `${a.type} ${a.data}`).join("<br>"));
+    addHtml("解析", d.answers.map((a) => `${esc(a.type)} ${esc(a.data)}`).join("<br>"));
   }
-  if (p.error) add("错误", `<span class="stamp err">${esc(p.error)}</span>`);
-  if (d.dstAddr) add("目标 IP", d.dstAddr);
+  if (p.error) addHtml("错误", `<span class="stamp err">${esc(p.error)}</span>`);
+  add("目标 IP", d.dstAddr);
 
   const dl = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
   const raw = d.hops
