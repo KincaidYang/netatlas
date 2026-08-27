@@ -1,6 +1,6 @@
 import type { AtlasResultRow, Env } from "../types";
 import { parseCertificate, pemToDer, sha256Hex, type CertInfo } from "../x509";
-import { assertPublicTarget, asString, af, bad, ms, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, bad, isIpLiteral, ms, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface SslParams {
@@ -10,8 +10,6 @@ export interface SslParams {
   /** SNI hostname; defaults to the target. */
   hostname?: string;
 }
-
-const isIpLiteral = (t: string): boolean => t.includes(":") || /^[\d.]+$/.test(t);
 
 /** TLS ports we are willing to point probes at — this is not a port scanner. */
 const ALLOWED_PORTS = new Set([443, 465, 636, 853, 993, 995, 8443]);
@@ -44,6 +42,7 @@ export const sslcert: MeasurementKind<SslParams> = {
       af: p.af,
       target: p.target,
       port: p.port,
+      ...resolveOnProbe(p.target),
       description,
       is_oneoff: true,
     };

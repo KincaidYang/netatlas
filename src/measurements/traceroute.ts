@@ -1,5 +1,5 @@
 import type { AtlasResultRow, Env } from "../types";
-import { assertPublicTarget, asString, af, ms, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, ms, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface TracerouteParams {
@@ -39,6 +39,7 @@ export const traceroute: MeasurementKind<TracerouteParams> = {
       target: p.target,
       protocol: p.protocol,
       paris: 1,
+      ...resolveOnProbe(p.target),
       description,
       is_oneoff: true,
     };

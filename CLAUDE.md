@@ -99,6 +99,12 @@ Gotchas already paid for:
   verdict. It defaults to the target unless the target is an IP literal.
 - **ping reports `-1`** for min/avg/max when nothing came back. That is "no
   measurement", not a negative RTT.
+- **`resolve_on_probe: true` is not the default.** Without it Atlas resolves
+  the target once, centrally, and hands the same address to every probe — so a
+  multi-region run measures the path to one IP from everywhere. On `qq.com`
+  that meant all 19 probes pinging `203.205.254.157`; with it they reach three
+  different addresses. Every kind sets it for hostname targets (`resolveOnProbe()`
+  in `src/measurements/kind.ts`), and skips it for IP literals.
 - **No npm deps for parsing.** `src/dns.ts` decodes base64 `abuf` DNS wire
   format and `src/x509.ts` reads DER certificates by hand, both so nothing
   needs `nodejs_compat`. `src/x509.ts` was verified field-by-field against

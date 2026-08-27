@@ -259,3 +259,39 @@ describe("sslcert.parseRow", () => {
     expect(sslcert.summarize([outcomes[0]])).toMatchObject({ distinctFingerprints: 1 });
   });
 });
+
+describe("resolve_on_probe", () => {
+  const KINDS_WITH_TARGET = { ping, traceroute, ntp, sslcert };
+
+  it("makes every probe resolve a hostname itself", async () => {
+    // Without it Atlas resolves the name once, centrally, and hands the same
+    // address to every probe — so a multi-region run measures the path to one
+    // IP from everywhere instead of what each region actually reaches.
+    for (const [name, kind] of Object.entries(KINDS_WITH_TARGET)) {
+      const params = kind.validate({ target: "qq.com" }, {} as never);
+      expect(kind.buildDefinition(params as never, "d"), name).toMatchObject({ resolve_on_probe: true });
+    }
+    const httpDef = http.buildDefinition(
+      http.validate({ target: "de-fra-as3320.anchors.atlas.ripe.net" }, {} as never),
+      "d",
+    );
+    expect(httpDef).toMatchObject({ resolve_on_probe: true });
+  });
+
+  it("leaves it off when the target is already an address", async () => {
+    for (const [name, kind] of Object.entries(KINDS_WITH_TARGET)) {
+      for (const target of ["1.1.1.1", "2606:4700:4700::1111"]) {
+        const params = kind.validate({ target }, {} as never);
+        expect(kind.buildDefinition(params as never, "d"), `${name} ${target}`).not.toHaveProperty(
+          "resolve_on_probe",
+        );
+      }
+    }
+  });
+
+  it("is what dns has always done", () => {
+    expect(dns.buildDefinition(dns.validate({ target: "qq.com" }, {} as never), "d")).toMatchObject({
+      resolve_on_probe: true,
+    });
+  });
+});

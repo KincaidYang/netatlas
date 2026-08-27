@@ -349,10 +349,24 @@ function render(report, id) {
       : report.status === "Stopped"
         ? " · 测量已结束"
         : " · 已停止刷新";
+  // Each probe resolves the target itself, so the addresses they actually
+  // reached are part of the answer: one everywhere means anycast or a single
+  // origin, several means DNS is steering by region.
+  const ips = [
+    ...new Set(report.groups.flatMap((g) => g.probes.map((p) => p.detail?.dstAddr)).filter(Boolean)),
+  ];
+  const resolved =
+    ips.length === 1
+      ? `<span class="resolved">解析到 ${esc(ips[0])}</span>`
+      : ips.length > 1
+        ? `<span class="resolved" title="${esc(ips.join(" · "))}">解析到 <b>${ips.length}</b> 个不同 IP</span>`
+        : "";
+
   const head =
     `<div class="runhead">` +
     `<span class="kind">${esc(report.type)}</span>` +
     `<span class="what">${esc(target)}</span>` +
+    resolved +
     `<span class="fill${partial && !running ? " partial" : ""}">` +
     `${report.totalResponded}/${report.totalRequested} 个探针已回${note}</span>` +
     `<button type="button" id="share">复制链接</button></div>`;

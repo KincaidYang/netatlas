@@ -1,5 +1,5 @@
 import type { AtlasResultRow, Env } from "../types";
-import { assertPublicTarget, asString, af, ms, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, ms, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface NtpParams {
@@ -18,7 +18,7 @@ export const ntp: MeasurementKind<NtpParams> = {
   },
 
   buildDefinition(p, description) {
-    return { type: "ntp", af: p.af, target: p.target, description, is_oneoff: true };
+    return { type: "ntp", af: p.af, target: p.target, ...resolveOnProbe(p.target), description, is_oneoff: true };
   },
 
   parseRow(row: AtlasResultRow): ProbeOutcome {
