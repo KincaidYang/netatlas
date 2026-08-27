@@ -1,5 +1,5 @@
 import type { AtlasResultRow, Env } from "../types";
-import { assertPublicTarget, asString, af, resolveOnProbe, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, resolveMs, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface NtpParams {
@@ -21,6 +21,9 @@ export interface NtpParams {
  */
 const secToMs = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? Math.round(v * 1_000_000) / 1000 : null;
+
+/** Seconds between 1900-01-01 (the NTP epoch) and 1970-01-01. */
+const NTP_EPOCH = 2_208_988_800;
 
 /** 20 credits per probe — measured against a real account, RIPE does not document it. */
 export const ntp: MeasurementKind<NtpParams> = {
@@ -44,6 +47,13 @@ export const ntp: MeasurementKind<NtpParams> = {
     const offsets = answered.map((r) => secToMs(r.offset)).filter((v): v is number => v !== null);
     const avg = (xs: number[]) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 1000) / 1000 : null);
 
+    // How long ago the server last heard from its own upstream. A server that
+    // has been free-running for hours still advertises a healthy stratum.
+    const refTs = typeof row["ref-ts"] === "number" ? (row["ref-ts"] as number) : null;
+    const at = typeof row.timestamp === "number" ? row.timestamp : null;
+    const refAgeSec = refTs !== null && at !== null ? Math.round(at - (refTs - NTP_EPOCH)) : null;
+    const poll = typeof row.poll === "number" ? row.poll : null;
+
     return {
       ok: answered.length > 0,
       rttMs: avg(rtts),
@@ -57,6 +67,23 @@ export const ntp: MeasurementKind<NtpParams> = {
         rootDelay: secToMs(row["root-delay"]),
         rootDispersion: secToMs(row["root-dispersion"]),
         offsetMs: avg(offsets),
+        // The mean hides how much the three packets disagreed, which is what
+        // says whether the server (or the path) is steady.
+        offsetMinMs: offsets.length ? Math.min(...offsets) : null,
+        offsetMaxMs: offsets.length ? Math.max(...offsets) : null,
+        /** Poll interval is log2 seconds on the wire. */
+        pollSec: poll === null ? null : 2 ** poll,
+        /** Raw seconds; the console picks ns / µs / ms. */
+        precisionSec: typeof row.precision === "number" ? row.precision : null,
+        refAgeSec,
+        /**
+         * How long ago the *probe's* own clock was synchronised. An offset
+         * measured by a probe whose clock is stale says nothing about the
+         * server, so this is a caveat on the number above, not a nicety.
+         */
+        probeClockAgeSec: typeof row.lts === "number" ? row.lts : null,
+        // Milliseconds — unlike every other time in an ntp row.
+        resolveMs: resolveMs(row),
         dstAddr: typeof row.dst_addr === "string" ? row.dst_addr : null,
       },
     };

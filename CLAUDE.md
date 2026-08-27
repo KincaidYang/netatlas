@@ -97,6 +97,11 @@ Gotchas already paid for:
 - **sslcert needs SNI.** Without `hostname`, shared-hosting and CDN endpoints
   return a fallback certificate that reads as long-expired — a completely wrong
   verdict. It defaults to the target unless the target is an IP literal.
+- **`ttr` (the probe's own DNS resolve time) only exists with
+  `resolve_on_probe`,** and it is in **milliseconds on every type, ntp
+  included** — the one field in an ntp row that is not seconds. It is worth
+  surfacing: real runs show probes in China and the US spending ~5000 ms on
+  DNS, time a reader would otherwise attribute to the network.
 - **ntp reports seconds, everything else reports milliseconds.** `rtt`,
   `offset`, `root-delay`, `root-dispersion` and every `*-ts` in an ntp row are
   seconds. Proof from the row itself: `ref-ts` − 2208988800 (the NTP epoch)

@@ -70,6 +70,15 @@ export function af(input: Record<string, unknown>): 4 | 6 {
 export const ms = (n: unknown): number | null =>
   typeof n === "number" && Number.isFinite(n) ? Math.round(n * 1000) / 1000 : null;
 
+/**
+ * How long the probe's own resolver took, in ms. Atlas only reports `ttr` when
+ * the probe resolved the name itself, which is why it appeared the moment
+ * resolve_on_probe was switched on — and it immediately showed probes in China
+ * and the US spending five seconds on DNS. That time is inside the number a
+ * user reads as latency, so hiding it misattributes DNS trouble to the network.
+ */
+export const resolveMs = (row: AtlasResultRow): number | null => ms(row.ttr);
+
 export function stringifyError(e: unknown): string {
   if (typeof e === "string") return e;
   if (e && typeof e === "object") {
