@@ -71,6 +71,10 @@ async function init() {
   state.presets = presets;
 
   $("type").innerHTML = types.map((t) => `<option value="${t.type}">${esc(t.label)}</option>`).join("");
+  // The API takes ten DNS record types and /types advertises them; without a
+  // selector the console could only ever ask for A, i.e. only ever see IPs.
+  const qtypes = types.find((t) => t.type === "dns")?.queryTypes ?? [];
+  $("qtype").innerHTML = qtypes.map((q) => `<option value="${esc(q)}">${esc(q)}</option>`).join("");
   // The result may already be on screen; the type select only exists now.
   syncFormTo(state.report);
   $("more").textContent = `展开全部 ${nodes.totalCount} 个节点`;
@@ -105,6 +109,9 @@ function syncFormTo(report) {
     select.value = report.type;
     syncTypeHint();
   }
+  // A shared link should say which record was asked for, not silently sit on A.
+  const qtype = $("qtype");
+  if (report.queryType && qtype.options.length > 0) qtype.value = report.queryType;
   if (!$("target").value) $("target").value = String(report.target ?? "").replace(/\.$/, "");
 }
 
@@ -220,6 +227,7 @@ function updateCost() {
 
 function syncTypeHint() {
   const type = $("type").value;
+  $("qtype").hidden = type !== "dns";
   const hint = {
     http: "HTTP 只能打 RIPE anchor，测的是到 anchor 的链路，不是你自己网站的可用性",
     traceroute: "traceroute 单价是 ping 的 10 倍，限额更紧",
@@ -268,6 +276,7 @@ async function submit(event) {
         target,
         nodes: [...state.selected],
         perNode: PER_NODE,
+        ...($("type").value === "dns" ? { queryType: $("qtype").value } : {}),
       }),
     });
     history.replaceState(null, "", `?m=${created.measurementId}`);
@@ -365,6 +374,7 @@ function render(report, id) {
   const head =
     `<div class="runhead">` +
     `<span class="kind">${esc(report.type)}</span>` +
+    `${report.queryType ? `<span class="qt">${esc(report.queryType)}</span>` : ""}` +
     `<span class="what">${esc(target)}</span>` +
     resolved +
     `<span class="fill${partial && !running ? " partial" : ""}">` +

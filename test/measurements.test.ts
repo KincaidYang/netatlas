@@ -112,7 +112,7 @@ describe("dns.parseRow", () => {
 
   it("collects the distinct answers a node saw — the point of a DNS probe", async () => {
     const outcomes = [await dns.parseRow(row({ result: { abuf: ABUF, rt: 5 } })), await dns.parseRow(row({ result: { abuf: ABUF, rt: 7 } }))];
-    expect(dns.summarize(outcomes)).toMatchObject({ distinctAnswers: ["8.8.4.4", "8.8.8.8"] });
+    expect(dns.summarize(outcomes)).toMatchObject({ distinctAnswers: ["A 8.8.4.4", "A 8.8.8.8"] });
   });
 });
 
@@ -293,5 +293,26 @@ describe("resolve_on_probe", () => {
     expect(dns.buildDefinition(dns.validate({ target: "qq.com" }, {} as never), "d")).toMatchObject({
       resolve_on_probe: true,
     });
+  });
+});
+
+describe("dns query types", () => {
+  it("carries the caller's record type into the Atlas definition", () => {
+    for (const qt of ["A", "AAAA", "CNAME", "NS", "SOA", "TXT", "MX", "PTR", "SRV", "CAA"]) {
+      const params = dns.validate({ target: "qq.com", queryType: qt }, {} as never);
+      expect(dns.buildDefinition(params, "d"), qt).toMatchObject({ query_type: qt, query_class: "IN" });
+    }
+  });
+
+  it("defaults to A, which is why the console needs a selector", () => {
+    expect(dns.validate({ target: "qq.com" }, {} as never).queryType).toBe("A");
+  });
+
+  it("keeps the record type in the cross-node comparison", async () => {
+    // A CNAME and an A in one answer are different facts; comparing bare
+    // values across nodes would conflate them.
+    const ABUF = "EjSBgAABAAIAAAAAA2RucwZnb29nbGUAAAEAAcAMAAEAAQAAAHsABAgIBATADAABAAEAAAB7AAQICAgI";
+    const out = await dns.parseRow(row({ result: { abuf: ABUF, rt: 5 } }));
+    expect(dns.summarize([out]).distinctAnswers).toEqual(["A 8.8.4.4", "A 8.8.8.8"]);
   });
 });
