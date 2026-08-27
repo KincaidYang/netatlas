@@ -105,6 +105,16 @@ Gotchas already paid for:
   that meant all 19 probes pinging `203.205.254.157`; with it they reach three
   different addresses. Every kind sets it for hostname targets (`resolveOnProbe()`
   in `src/measurements/kind.ts`), and skips it for IP literals.
+- **Atlas's `query_type` enum is narrower than DNS.** Accepted: `A AAAA CNAME
+  NS SOA TXT MX PTR SRV NAPTR DS DNSKEY RRSIG NSEC TLSA ANY`. Rejected with
+  `"<TYPE>" is not a valid choice`: **CAA**, HTTPS, SVCB, NSEC3, NSEC3PARAM,
+  URI, SSHFP, SPF, CDS, CDNSKEY, HINFO, LOC, CERT, DNAME. `SUPPORTED_QUERY_TYPES`
+  is that accepted list and nothing else — `src/dns.ts` can *decode* far more
+  (SVCB/HTTPS included, which do turn up inside ANY answers), but offering a
+  type Atlas will not take just buys a 400.
+  To re-check the list without spending credits, POST each candidate with
+  `probes: []`: the request always fails, so nothing is billed, but field
+  validation still runs and names the bad `query_type`.
 - **DNSSEC needs the DO bit, and AD without it is meaningless.** A DS/DNSKEY
   query without `set_do_bit` comes back unsigned and the resolver never sets
   AD, so "did this resolver validate" is invisible. `src/measurements/dnsKind.ts`

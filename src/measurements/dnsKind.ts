@@ -3,9 +3,19 @@ import { parseDnsMessage, type DnsRecord } from "../dns";
 import { assertPublicTarget, asString, af, bad, ms, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
+/**
+ * Exactly what Atlas accepts in `query_type` — not what DNS defines, and not
+ * what src/dns.ts can decode. Anything else comes back as
+ * `"<TYPE>" is not a valid choice` from the create call.
+ *
+ * Verified by POSTing each candidate with `probes: []`, which always fails and
+ * therefore costs nothing, while still running field validation. CAA, HTTPS,
+ * SVCB, NSEC3, NSEC3PARAM, URI, SSHFP, CDS, CDNSKEY, SPF, HINFO, LOC, CERT and
+ * DNAME are all rejected; the ones below are all accepted.
+ */
 export const SUPPORTED_QUERY_TYPES = [
-  "A", "AAAA", "CNAME", "NS", "SOA", "TXT", "MX", "PTR", "SRV", "CAA", "HTTPS", "SVCB",
-  "DS", "DNSKEY", "RRSIG", "NSEC", "NSEC3", "TLSA",
+  "A", "AAAA", "CNAME", "NS", "SOA", "TXT", "MX", "PTR", "SRV", "NAPTR",
+  "DS", "DNSKEY", "RRSIG", "NSEC", "TLSA", "ANY",
 ] as const;
 
 /**
@@ -13,7 +23,7 @@ export const SUPPORTED_QUERY_TYPES = [
  * DO bit gets an unsigned answer back and the resolver never sets AD, so the
  * one thing you came to find out — did this resolver validate — is invisible.
  */
-const DNSSEC_TYPES = new Set(["DS", "DNSKEY", "RRSIG", "NSEC", "NSEC3", "TLSA"]);
+const DNSSEC_TYPES = new Set(["DS", "DNSKEY", "RRSIG", "NSEC", "TLSA"]);
 export type QueryType = (typeof SUPPORTED_QUERY_TYPES)[number];
 
 export interface DnsParams {
