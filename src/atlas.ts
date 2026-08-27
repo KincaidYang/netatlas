@@ -1,86 +1,145 @@
 import { HTTPException } from "hono/http-exception";
-import type { AtlasDnsResult, AtlasMeasurement, ProbeMeta } from "./types";
-import type { ProbeSelectionGroup } from "./regions";
+import type {
+  AtlasAnchor,
+  AtlasCredits,
+  AtlasMeasurement,
+  AtlasParticipationRequest,
+  AtlasResultRow,
+  ProbeMeta,
+} from "./types";
 
 const ATLAS_BASE = "https://atlas.ripe.net/api/v2";
 
-export interface CreateDnsOptions {
-  domain: string;
-  queryType: string;
-  af: 4 | 6;
-  probes: ProbeSelectionGroup[];
-  description: string;
-  /** Explicit resolver/authoritative target. Mutually exclusive with probe resolver. */
-  target?: string;
+/** One entry of the Atlas `probes[]` selection array. */
+export interface ProbeSelectionGroup {
+  type: "country" | "asn" | "area" | "prefix" | "probes" | "msm";
+  value: string | number;
+  requested: number;
+  tags?: { include?: string[]; exclude?: string[] };
 }
 
-/** Thin REST client for the RIPE Atlas v2 API. No official JS SDK exists. */
-export class AtlasClient {
-  constructor(private readonly apiKey: string) {}
+export interface ProbeQuery {
+  asns?: number[];
+  countries?: string[];
+  af?: 4 | 6;
+  limit?: number;
+}
 
-  private authHeaders(): Record<string, string> {
-    return { Authorization: `Key ${this.apiKey}` };
+/**
+ * Thin REST client for the RIPE Atlas v2 API (there is no official JS SDK).
+ *
+ * Only creation needs the API key. Measurements are public by default, so
+ * every read below works unauthenticated — which is what lets a shared result
+ * link render for anyone, including measurements created with a caller's own
+ * key. We still send the key when we have one, for the higher rate limits.
+ */
+export class AtlasClient {
+  constructor(private readonly apiKey?: string) {}
+
+  private headers(json = false): Record<string, string> {
+    const h: Record<string, string> = {};
+    if (this.apiKey) h.Authorization = `Key ${this.apiKey}`;
+    if (json) h["Content-Type"] = "application/json";
+    return h;
   }
 
-  /** Create a one-off DNS measurement. Returns the new measurement id. */
-  async createDnsMeasurement(opts: CreateDnsOptions): Promise<number> {
-    const definition: Record<string, unknown> = {
-      type: "dns",
-      af: opts.af,
-      query_class: "IN",
-      query_type: opts.queryType,
-      query_argument: opts.domain,
-      resolve_on_probe: true,
-      description: opts.description,
-      is_oneoff: true,
-    };
-    // Either query the probe's own resolver (reveals real geo/CDN scheduling)
-    // or a specific target server — never both.
-    if (opts.target) definition.target = opts.target;
-    else definition.use_probe_resolver = true;
+  private async get<T>(path: string, fallback?: T): Promise<T> {
+    const res = await fetch(`${ATLAS_BASE}${path}`, { headers: this.headers() });
+    if (res.status === 404 && fallback !== undefined) return fallback;
+    if (!res.ok) {
+      throw new HTTPException(res.status === 404 ? 404 : 502, {
+        message: `atlas GET ${path} failed (${res.status})`,
+      });
+    }
+    return (await res.json()) as T;
+  }
 
+  /** Create a one-off measurement. Returns the new measurement id. */
+  async createMeasurement(
+    definition: Record<string, unknown>,
+    probes: ProbeSelectionGroup[],
+  ): Promise<number> {
+    if (!this.apiKey) throw new HTTPException(500, { message: "no Atlas API key configured" });
     const res = await fetch(`${ATLAS_BASE}/measurements/`, {
       method: "POST",
-      headers: { ...this.authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ definitions: [definition], probes: opts.probes, is_oneoff: true }),
+      headers: this.headers(true),
+      body: JSON.stringify({ definitions: [definition], probes, is_oneoff: true }),
     });
+    const body = await res.text();
     if (!res.ok) {
-      throw new HTTPException(502, { message: `atlas create failed (${res.status}): ${await res.text()}` });
+      // Pass Atlas's own wording through — it is far more useful than ours
+      // (e.g. "Only anchors may be targeted", quota and concurrency errors).
+      throw new HTTPException(res.status === 400 ? 400 : 502, {
+        message: `atlas create failed (${res.status}): ${body.slice(0, 400)}`,
+      });
     }
-    const data = (await res.json()) as { measurements?: number[] };
+    const data = JSON.parse(body) as { measurements?: number[] };
     const id = data.measurements?.[0];
     if (!id) throw new HTTPException(502, { message: "atlas create returned no measurement id" });
     return id;
   }
 
   async getMeasurement(id: number): Promise<AtlasMeasurement> {
-    const res = await fetch(`${ATLAS_BASE}/measurements/${id}/`, { headers: this.authHeaders() });
-    if (!res.ok) {
-      throw new HTTPException(res.status === 404 ? 404 : 502, {
-        message: `atlas measurement fetch failed (${res.status})`,
-      });
+    try {
+      return await this.get<AtlasMeasurement>(`/measurements/${id}/`);
+    } catch (err) {
+      if (err instanceof HTTPException && err.status === 404) {
+        throw new HTTPException(404, { message: `measurement ${id} not found` });
+      }
+      throw err;
     }
-    return (await res.json()) as AtlasMeasurement;
   }
 
-  async getResults(id: number): Promise<AtlasDnsResult[]> {
-    const res = await fetch(`${ATLAS_BASE}/measurements/${id}/results/`, { headers: this.authHeaders() });
-    if (res.status === 404) return []; // not produced yet
-    if (!res.ok) throw new HTTPException(502, { message: `atlas results fetch failed (${res.status})` });
-    return (await res.json()) as AtlasDnsResult[];
+  getResults(id: number): Promise<AtlasResultRow[]> {
+    return this.get<AtlasResultRow[]>(`/measurements/${id}/results/`, []);
   }
 
-  /** Batch-fetch probe metadata (country/ASN) to group results by region. */
+  /**
+   * The original probe selection, stored and served by Atlas. This is what
+   * replaces a database: it tells us what was *requested* per group so we can
+   * report fill rates on a measurement we know nothing else about.
+   */
+  async getParticipationRequests(id: number): Promise<AtlasParticipationRequest[]> {
+    const data = await this.get<{ results?: AtlasParticipationRequest[] }>(
+      `/measurements/${id}/participation-requests/`,
+      {},
+    );
+    return (data.results ?? []).filter((r) => r.action === "add");
+  }
+
+  /** Batch-fetch probe metadata (country/ASN) to attribute results to nodes. */
   async getProbes(ids: number[]): Promise<Map<number, ProbeMeta>> {
     const map = new Map<number, ProbeMeta>();
     if (ids.length === 0) return map;
-    const url = `${ATLAS_BASE}/probes/?id__in=${ids.join(",")}&fields=id,country_code,asn_v4,asn_v6&page_size=${ids.length}`;
-    const res = await fetch(url, { headers: this.authHeaders() });
-    if (!res.ok) return map; // best-effort; aggregation falls back to "??"
-    const data = (await res.json()) as { results?: Array<{ id: number } & ProbeMeta> };
-    for (const p of data.results ?? []) {
-      map.set(p.id, { country_code: p.country_code, asn_v4: p.asn_v4, asn_v6: p.asn_v6 });
-    }
+    const url = `/probes/?id__in=${ids.join(",")}&fields=id,country_code,asn_v4,asn_v6,status&page_size=${ids.length}`;
+    const data = await this.get<{ results?: ProbeMeta[] }>(url, {});
+    for (const p of data.results ?? []) map.set(p.id, p);
     return map;
+  }
+
+  /** Find currently-connected probes, used to resolve nodes to concrete probes. */
+  async findProbes(q: ProbeQuery): Promise<ProbeMeta[]> {
+    const params = new URLSearchParams({
+      status: "1", // Connected
+      fields: "id,country_code,asn_v4,asn_v6,status",
+      page_size: String(q.limit ?? 500),
+    });
+    if (q.asns?.length) params.set(q.af === 6 ? "asn_v6__in" : "asn_v4__in", q.asns.join(","));
+    if (q.countries?.length) params.set("country_code__in", q.countries.join(","));
+    const data = await this.get<{ results?: ProbeMeta[] }>(`/probes/?${params}`, {});
+    return data.results ?? [];
+  }
+
+  /** Live anchors only — the list is full of decommissioned ones. */
+  async getAnchors(): Promise<AtlasAnchor[]> {
+    const data = await this.get<{ results?: AtlasAnchor[] }>(
+      "/anchors/?page_size=500&fields=id,fqdn,city,country,ip_v4,ip_v6,is_disabled",
+      {},
+    );
+    return (data.results ?? []).filter((a) => !a.is_disabled);
+  }
+
+  getCredits(): Promise<AtlasCredits> {
+    return this.get<AtlasCredits>("/credits/");
   }
 }

@@ -3,9 +3,22 @@
   "name": "netatlas",
   "main": "src/index.ts",
   "compatibility_date": "2025-06-01",
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  "assets": { "directory": "./public", "not_found_handling": "none" },
+  "durable_objects": {
+    "bindings": [
+      { "name": "CATALOG", "class_name": "CatalogCache" },
+      { "name": "RATE_LIMITER", "class_name": "RateLimiter" },
+      { "name": "BUDGET", "class_name": "DailyBudget" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["CatalogCache", "RateLimiter", "DailyBudget"] }
+  ]
   // Secrets (set with `wrangler secret put <NAME>`, do NOT put them here):
   //   ATLAS_API_KEY  — RIPE Atlas API key with credits (required)
-  //   API_TOKEN      — optional bearer token; if set, callers must send
-  //                    `Authorization: Bearer <API_TOKEN>` to protect your credits
+  //   ADMIN_TOKEN    — optional; guards /admin/* (budget inspection, catalogue refresh)
+  // Plain vars you may set here or in the dashboard:
+  //   PUBLIC_DAILY_CREDITS   — global anonymous budget per UTC day (default 120000)
+  //   ALLOW_ANY_HTTP_TARGET  — "1" only if RIPE whitelisted this account for non-anchor HTTP
 }

@@ -1,93 +1,71 @@
-import { parseDnsAnswers, type DnsRecord } from "./dns";
-import type { AtlasDnsResult, ProbeMeta } from "./types";
+import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./measurements";
+import type { AtlasResultRow, ProbeMeta } from "./types";
 
-export interface ResolverResult {
-  dst: string | null;
-  rttMs: number | null;
-  answers: DnsRecord[];
-  error?: string;
-}
-
-export interface ProbeResult {
+export interface ProbeResult extends ProbeOutcome {
   probeId: number;
   asn: number | null;
-  rttMs: number | null;
-  answers: DnsRecord[];
-  error?: string;
-  /** Present only when the probe queried more than one local resolver. */
-  resolvers?: ResolverResult[];
+  country: string | null;
+  from: string | null;
 }
 
-export interface RegionResult {
-  country: string;
+export interface GroupResult {
+  /** Node id in Phase B; ISO country code today. */
+  key: string;
   requested: number;
   responded: number;
+  summary: NodeSummary;
   probes: ProbeResult[];
 }
 
+/** How to attribute a probe to a group. */
+export type KeyOf = (meta: ProbeMeta | undefined) => string;
+
 /**
- * Group raw Atlas results by probe country. Always reports `requested` vs
- * `responded` so callers can see under-filled regions (e.g. "JP requested 3,
- * responded 1") rather than mistaking a single probe for a regional verdict.
+ * Group raw Atlas results and let the measurement type decode each row.
+ *
+ * Always reports `requested` vs `responded` so callers can see under-filled
+ * groups ("JP requested 3, responded 1") rather than mistaking one probe for
+ * a regional verdict — which matters a lot for countries where Atlas has
+ * barely any probes.
  */
-export function aggregate(
-  results: AtlasDnsResult[],
+export async function aggregate(
+  kind: MeasurementKind<unknown>,
+  results: AtlasResultRow[],
   probeMeta: Map<number, ProbeMeta>,
   requested: Record<string, number>,
-): RegionResult[] {
-  const byCountry = new Map<string, RegionResult>();
-  const ensure = (cc: string): RegionResult => {
-    let r = byCountry.get(cc);
-    if (!r) {
-      r = { country: cc, requested: requested[cc] ?? 0, responded: 0, probes: [] };
-      byCountry.set(cc, r);
+  keyOf: KeyOf,
+): Promise<GroupResult[]> {
+  const groups = new Map<string, GroupResult>();
+  const ensure = (key: string): GroupResult => {
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, requested: requested[key] ?? 0, responded: 0, summary: {}, probes: [] };
+      groups.set(key, g);
     }
-    return r;
+    return g;
   };
 
-  for (const r of results) {
-    const meta = probeMeta.get(r.prb_id);
-    const region = ensure(meta?.country_code ?? "??");
-    region.responded++;
-    region.probes.push(extractProbe(r, meta));
+  for (const row of results) {
+    const meta = probeMeta.get(row.prb_id);
+    const group = ensure(keyOf(meta));
+    const outcome = await kind.parseRow(row);
+    group.responded++;
+    group.probes.push({
+      ...outcome,
+      probeId: row.prb_id,
+      asn: meta?.asn_v4 ?? meta?.asn_v6 ?? null,
+      country: meta?.country_code ?? null,
+      from: typeof row.from === "string" ? row.from : null,
+    });
   }
 
-  // Surface requested regions that returned nothing.
-  for (const cc of Object.keys(requested)) ensure(cc);
+  // Surface requested groups that returned nothing at all.
+  for (const key of Object.keys(requested)) ensure(key);
 
-  return [...byCountry.values()].sort((a, b) => a.country.localeCompare(b.country));
-}
-
-function extractProbe(r: AtlasDnsResult, meta?: ProbeMeta): ProbeResult {
-  const asn = meta?.asn_v4 ?? meta?.asn_v6 ?? null;
-  if (r.error) {
-    return { probeId: r.prb_id, asn, rttMs: null, answers: [], error: stringifyError(r.error) };
+  for (const g of groups.values()) {
+    g.summary = g.probes.length ? kind.summarize(g.probes) : {};
+    g.probes.sort((a, b) => a.probeId - b.probeId);
   }
 
-  const sets = r.resultset ?? (r.result ? [{ dst_addr: undefined, result: r.result }] : []);
-  const resolvers: ResolverResult[] = sets.map((s) => {
-    if (s.error) return { dst: s.dst_addr ?? null, rttMs: null, answers: [], error: stringifyError(s.error) };
-    const answers = s.result?.abuf ? parseDnsAnswers(s.result.abuf) : [];
-    return { dst: s.dst_addr ?? null, rttMs: s.result?.rt ?? null, answers };
-  });
-
-  const primary = resolvers[0];
-  const out: ProbeResult = {
-    probeId: r.prb_id,
-    asn,
-    rttMs: primary?.rttMs ?? null,
-    answers: primary?.answers ?? [],
-  };
-  if (primary?.error) out.error = primary.error;
-  if (resolvers.length > 1) out.resolvers = resolvers;
-  return out;
-}
-
-function stringifyError(e: unknown): string {
-  if (typeof e === "string") return e;
-  try {
-    return JSON.stringify(e);
-  } catch {
-    return "error";
-  }
+  return [...groups.values()].sort((a, b) => a.key.localeCompare(b.key));
 }

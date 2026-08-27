@@ -2,75 +2,173 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Status
-
-Phase 1 scaffold exists (TypeScript + Hono on Cloudflare Workers). The two-phase API, probe-selection, DNS-abuf parsing, and result aggregation are implemented. No persistence, no rate limiter, no tests yet.
-
 ## What this is
 
-`netatlas` — an **on-demand multi-region DNS probing API** built on top of [RIPE Atlas](https://atlas.ripe.net/). A caller passes a domain; the service launches a one-off DNS measurement across probes in several regions and returns the per-region resolution results.
+`netatlas` — an **on-demand multi-region network probing platform** ("拨测") built on
+[RIPE Atlas](https://atlas.ripe.net/). A caller picks a target and a few
+country×operator nodes; the service launches a one-off measurement across real
+probes and returns per-node results. Public, no login, no database.
 
-Phase 1 scope (deliberately small):
-- Input: a domain (+ optional query type and region list).
-- Trigger a **one-off** RIPE Atlas DNS measurement (no recurring/scheduled monitoring).
-- Collect and return per-region results. **No database** — results live on the Atlas side; this service is stateless.
+Six measurement types: **ping, dns, traceroute, sslcert, http, ntp**.
 
-## The single most important constraint: Atlas measurements are asynchronous
+## Status
 
-Creating a one-off measurement does **not** return DNS results. RIPE schedules global probes to execute it; first results arrive in seconds, but a region set typically takes ~30s to a few minutes to fill in. Design everything around this:
+Phases A–E are done: type-plugin core, node catalogue, quota/rate limiting,
+`/api/v1` surface with stateless share links, and the single-page console.
+**No tests yet** — that is the next piece of work.
 
-- Do **not** try to create-and-return-results in one blocking call as the primary path.
-- Two-phase API is the core pattern:
-  - `POST /probe` → create measurement, return `{ measurementId }` immediately.
-  - `GET /probe/:id` → fetch + aggregate current results from Atlas.
-- A convenience `POST /probe/sync` may create then short-poll within a bounded window (~20s) and return whatever has arrived. It must never block unbounded — this is also what keeps it within Cloudflare Workers CPU/time limits.
+## The two constraints everything else follows from
 
-## Stack & why
+**1. Atlas measurements are asynchronous.** Creating one does not return
+results; probes report over ~30s to a few minutes. So:
 
-- **TypeScript + [Hono](https://hono.dev/) on Cloudflare Workers.** Workers-only — no local/Node deployment target. Entry point `src/index.ts` exports the Hono `app` as the Worker fetch handler.
-- **No RIPE Atlas SDK.** The official SDKs (cousteau/sagan) are Python only. Talk to the Atlas v2 REST API directly with `fetch` (`src/atlas.ts`).
-- **No npm deps for DNS parsing.** Atlas returns answers as base64 `abuf` (raw DNS wire format); `src/dns.ts` decodes it by hand (incl. name-compression pointers) so nothing depends on Node `Buffer`/`nodejs_compat`.
+- `POST /api/v1/probe` → create, return `{ measurementId, shareUrl }` immediately.
+- `GET /api/v1/m/:id` → fetch + aggregate whatever has arrived so far.
+- `POST /api/v1/probe/sync` short-polls within a bounded window (≤25s) for CLI users.
+- The console polls client-side every 3s; the server never blocks.
 
-## Atlas integration notes (the non-obvious parts)
+**2. Credits are real money off a real account.** Per-probe cost, all verified
+against actual spend (RIPE documents only the first four):
 
-- **Auth:** `Authorization: Key <ATLAS_API_KEY>` header. The key is a secret — local: `.dev.vars`/`.env` (never commit); Workers: `wrangler secret put ATLAS_API_KEY`.
-- **Credits burn per probe per measurement.** A public endpoint WILL drain the account fast. Enforce a max probe count per request and per-caller rate limiting from day one.
-- **Create one-off DNS measurement:** `POST https://atlas.ripe.net/api/v2/measurements/` with top-level `is_oneoff: true`, a `definitions[]` array, and a `probes[]` array.
-- **Multi-region = multiple probe-selection groups**, e.g. `probes: [{type:"country",value:"US",requested:3},{type:"country",value:"JP",requested:3}, ...]`. Keep a configurable default region set (e.g. US/DE/JP/SG/BR).
-- **DNS definition semantics to expose in the API:**
-  - `use_probe_resolver: true` → query each probe's local recursive resolver (reveals real geo/CDN scheduling — the usual choice).
-  - vs. explicit `target` → query a specific authoritative/recursive server.
-  - Plus `query_type` (A/AAAA/CNAME/TXT/SOA…), `query_class: "IN"`, `af` (4/6).
-- **Fetch results:** `GET https://atlas.ripe.net/api/v2/measurements/<id>/results/`. Aggregate by probe country; extract resolved IPs, RTT, and error states (timeout/NXDOMAIN).
+| ping | dns (UDP) | dns (TCP) | sslcert | http | ntp | traceroute |
+|---|---|---|---|---|---|---|
+| 3 | 10 | 20 | 10 | **20** | **20** | 30 |
+
+The account holds ~30M credits, earns ~150k/day from self-hosted probes, and
+Atlas caps spend at 10M/day. `PUBLIC_DAILY_CREDITS` defaults to 120,000 —
+deliberately below daily income, so the public service runs on interest.
+
+## Statelessness: Atlas *is* the database
+
+There is no D1, no KV, no persistence of user data. Everything a result page
+needs is public on the Atlas side and readable **without any API key**:
+
+- `GET /measurements/<id>/` → type, target, status
+- `GET /measurements/<id>/participation-requests/` → **the original probe
+  selection, verbatim** — this is how we know what was *requested* per node
+- `GET /measurements/<id>/results/` → the results, kept forever
+
+So a measurement id is the permalink. `/m/<id>` renders for anyone, including
+measurements created with a caller's own key. `src/describe.ts` only writes a
+human-readable tag into the Atlas `description` (capped at 255 chars) — it is
+**not** load-bearing; do not reintroduce a dependency on parsing it.
+
+The only server-side state is operational, in Durable Objects: rate-limit
+buckets, the credit ledger, and the node-catalogue cache.
+
+## Node model: country × operator ASN
+
+A node id is `cc-asn` (`cn-4134` = 中国·电信) and is **self-describing**, so
+selection never depends on the catalogue — any well-formed pair works.
+
+**Do not use Atlas `{type:"asn"}` selection.** ASN selection is *global*:
+AS16509 (AWS) has ~100 connected probes across 25 countries, only 8% in Hong
+Kong, so "香港 · AWS" would silently probe from Virginia. `resolveNodes()` in
+`src/nodes.ts` resolves nodes to **explicit probe ids** at request time, live
+against `status=1`, then emits one `{type:"probes"}` group per node.
+
+- `data/nodes.json` is a **cold-start seed only** (242 nodes / 125 countries,
+  62 marked `featured`). Regenerate with `npm run nodes:refresh`.
+- At runtime the `CatalogCache` DO re-sweeps Atlas on a 3h TTL. A page load
+  *triggers* a refresh but never waits for one — a sweep is 30 requests /
+  ~1 MB / ~5s, which is fine every few hours and abusive on every page load.
+- Probe counts in the catalogue are a **display and query-planning hint**,
+  never truth. Truth is the `available` / `unavailable` fields returned by a
+  real request.
+
+**China has very few probes** (~65 connected nationwide; 电信 11, 联通 10,
+移动 6). Chinese nodes under-fill often — always surface requested-vs-responded
+rather than implying a full result.
+
+## Adding a measurement type
+
+Add one file under `src/measurements/` implementing `MeasurementKind` and
+register it in `src/measurements/index.ts`. Nothing else needs to know types
+exist. Each kind owns its credit cost, input validation (including target
+safety), Atlas definition, row parsing and per-node summary.
+
+Gotchas already paid for:
+
+- **http is anchor-only.** Non-anchor targets are rejected upstream with
+  `Only anchors may be targeted`; a case-by-case RIPE exemption exists but this
+  account does not have one. `ALLOW_ANY_HTTP_TARGET=1` flips it if that changes.
+  The anchor list is full of `is_disabled: true` entries — filter them or Atlas
+  answers `This target cannot be resolved`.
+- **sslcert needs SNI.** Without `hostname`, shared-hosting and CDN endpoints
+  return a fallback certificate that reads as long-expired — a completely wrong
+  verdict. It defaults to the target unless the target is an IP literal.
+- **ping reports `-1`** for min/avg/max when nothing came back. That is "no
+  measurement", not a negative RTT.
+- **No npm deps for parsing.** `src/dns.ts` decodes base64 `abuf` DNS wire
+  format and `src/x509.ts` reads DER certificates by hand, both so nothing
+  needs `nodejs_compat`. `src/x509.ts` was verified field-by-field against
+  `openssl x509` on real RSA and ECC certificates.
+
+## Quotas — read `src/quota.ts` before changing any limit
+
+Every number lives in that one file. Two tiers: anonymous (billed to the
+platform key, metered against the global budget) and BYOK (caller sends
+`X-Atlas-Key`, spends their own credits, not metered). Only a **hash** of the
+key or IP is ever stored — never the value.
+
+`DailyBudget` reconciles against Atlas's own `past_day_credits_spent` every 10
+minutes and gates on `max(local ledger, Atlas)`. That way a wrong cost estimate
+— or the account being spent elsewhere — cannot quietly drain it.
+
+429/503 responses carry `Retry-After` and the remaining allowance. They are
+thrown as `QuotaError` (which carries its own `Response`), because Hono's
+`HTTPException` loses a custom response when the error handler re-serialises it.
 
 ## File map
 
 ```
-src/index.ts      Hono app: auth gate, routes (/probe, /probe/:id, /probe/sync, /presets), polling
-src/atlas.ts      AtlasClient — REST wrapper (create/get measurement, get results, get probes)
-src/regions.ts    REGION_PRESETS + buildProbeSelection (country groups, cost caps, AF tags)
-src/dns.ts        parseDnsAnswers — decode base64 abuf → records
-src/aggregate.ts  group results by probe country; requested-vs-responded fill rates
-src/describe.ts   encode/parse the requested-region map into the Atlas measurement description
-src/types.ts      Env + Atlas response shapes
-```
+public/index.html      console: markup + the whole design system (inline CSS)
+public/app.js          console behaviour: chips, polling, the two result views
+public/fonts/          self-hosted IBM Plex woff2 — no Google Fonts (blocked in CN)
+data/nodes.json        generated node catalogue + label tables + policy
+scripts/build-nodes.mjs  regenerates data/nodes.json from live Atlas data
 
-**Statelessness trick:** there is no DB, so `GET /probe/:id` recovers what was *requested* per region by parsing it back out of the measurement `description` (written by `buildDescription` at create time). If you add persistence, this is the thing to replace.
+src/index.ts           route assembly, error handling, DO exports
+src/routes/probe.ts    create + results + the quota chain, in that order
+src/routes/meta.ts     nodes / presets / types / anchors / quota
+src/measurements/      one file per type + the MeasurementKind contract
+src/nodes.ts           catalogue access, node→probe resolution, presets
+src/catalog.ts         CatalogCache DO — TTL sweep of live probe counts
+src/quota.ts           every limit, in one place
+src/gate.ts            identity (anon vs BYOK), quota checks, QuotaError
+src/ratelimit.ts       RateLimiter DO — per-caller token buckets
+src/budget.ts          DailyBudget DO — credit ledger, in-flight cap, dedupe
+src/atlas.ts           Atlas v2 REST client (no official JS SDK exists)
+src/aggregate.ts       group results by node, delegate parsing to the kind
+src/dns.ts             base64 abuf → records
+src/x509.ts            DER → certificate fields
+src/describe.ts        the Atlas-side label (cosmetic)
+```
 
 ## Commands
 
 - `npm run dev` — `wrangler dev` (needs `.dev.vars` with `ATLAS_API_KEY`)
 - `npm run typecheck` — `tsc --noEmit`
-- `npm run deploy` — `wrangler deploy` (set secrets first: `wrangler secret put ATLAS_API_KEY`)
-- Tests: none yet. When adding, `parseDnsAnswers` (feed it captured base64 abufs) and `aggregate` are the pure, high-value units to cover.
+- `npm run nodes:refresh` — regenerate `data/nodes.json`, then commit it
+- `npm run deploy` — `wrangler deploy`
+
+Smoke-testing costs real credits. Use ping with one probe per node (3 credits
+each) unless the type under test is the point.
 
 ## Deployment & the ATLAS_API_KEY secret (hard-won)
 
-This repo deploys via **Workers Builds CI** (push to `main` → `wrangler deploy`). `ATLAS_API_KEY` **must be a runtime Worker secret** — set it with `wrangler secret put ATLAS_API_KEY` (writes straight to the Worker; preserved across `wrangler deploy`, so CI rebuilds keep it).
+Deploys run through **Workers Builds CI** (push to `main` → `wrangler deploy`).
+`ATLAS_API_KEY` **must be a runtime Worker secret** — `wrangler secret put
+ATLAS_API_KEY`. It is preserved across `wrangler deploy`, so CI rebuilds keep it.
 
-Do **not** provide the key as either of these — both produce `401 "key does not exist"` at runtime, and we burned real time on both:
+Do **not** provide it as either of these — both produce `401 "key does not
+exist"` at runtime, and we burned real time on both:
 
-- **Plaintext Variable** in the dashboard → wiped on the next CI `wrangler deploy` (config has no `vars`, so wrangler removes it; shows up as a "deleted variable: ATLAS_API_KEY" deployment).
-- **Workers Builds *build* variable** (Settings → Builds) → only exists during the build step, never at runtime, so `c.env.ATLAS_API_KEY` is always empty.
+- **Plaintext Variable** in the dashboard → wiped on the next CI `wrangler
+  deploy` (config has no `vars`, so wrangler removes it).
+- **Workers Builds *build* variable** → exists only during the build step, so
+  `c.env.ATLAS_API_KEY` is always empty at runtime.
 
-Diagnosing: a temporary `GET /debug` returning `{ keyPresent, keyLength, looksLikeUuid, hasStrayWhitespace }` (no key chars) is the fastest way to tell whether the binding actually reached the runtime. `wrangler secret list --name netatlas` and `wrangler deployments list --name netatlas` confirm what's really on the Worker.
+Durable Object bindings and the migration live in `wrangler.jsonc` and ship with
+CI. `wrangler secret list --name netatlas` and `wrangler deployments list
+--name netatlas` confirm what is actually on the Worker.
