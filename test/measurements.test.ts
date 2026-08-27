@@ -230,10 +230,12 @@ describe("sslcert.parseRow", () => {
   });
 
   it("reports TLS-level failures instead of pretending there is a certificate", async () => {
+    // A bare RegExp as a toMatchObject value asserts nothing at all — it does
+    // not fail on a mismatch — so the alert text is checked in full instead.
     expect(await sslcert.parseRow(row({ alert: { level: 2, description: 40 }, rt: 12 }))).toMatchObject({
       ok: false,
       rttMs: 12,
-      error: /TLS alert/,
+      error: 'TLS alert: {"level":2,"description":40}',
     });
     expect(await sslcert.parseRow(row({ err: "connection refused" }))).toMatchObject({
       ok: false,
