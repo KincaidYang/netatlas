@@ -1,4 +1,4 @@
-import type { BudgetState, ReserveResult } from "./budget";
+import type { BudgetState, DedupeClaim, ReserveResult } from "./budget";
 import { QUOTA, sha256Hex, type Tier } from "./quota";
 import type { TakeResult } from "./ratelimit";
 import type { Env } from "./types";
@@ -52,8 +52,43 @@ export async function reserveCredits(env: Env, credits: number): Promise<Reserve
   return res.json<ReserveResult>();
 }
 
-export async function releaseCredits(env: Env, credits: number): Promise<void> {
-  await budget(env).fetch(`https://budget/release?credits=${credits}`);
+/**
+ * Undo a reservation Atlas refused. Also drops the de-duplication claim, so a
+ * request waiting behind this one stops waiting for a measurement that will
+ * never exist.
+ */
+export async function releaseCredits(
+  env: Env,
+  credits: number,
+  ticket: string | undefined,
+  key: string,
+): Promise<void> {
+  const q = new URLSearchParams({ credits: String(credits), key });
+  if (ticket) q.set("ticket", ticket);
+  await budget(env).fetch(`https://budget/release?${q}`);
+}
+
+/** Creation succeeded: name the in-flight slot after the measurement and publish it for de-duplication. */
+export async function markCreated(
+  env: Env,
+  ticket: string | undefined,
+  measurementId: number,
+  key: string,
+): Promise<void> {
+  const q = new URLSearchParams({ id: String(measurementId), key });
+  if (ticket) q.set("ticket", ticket);
+  await budget(env).fetch(`https://budget/created?${q}`);
+}
+
+/**
+ * Free the in-flight slot of a measurement that has stopped.
+ *
+ * Idempotent, because the only place we reliably learn a measurement finished
+ * is someone loading its results — which may happen any number of times, or
+ * never (the TTL sweep is the backstop for that).
+ */
+export async function settleMeasurement(env: Env, measurementId: number): Promise<void> {
+  await budget(env).fetch(`https://budget/settle?id=${measurementId}`);
 }
 
 export async function budgetState(env: Env): Promise<BudgetState> {
@@ -61,13 +96,23 @@ export async function budgetState(env: Env): Promise<BudgetState> {
   return res.json<BudgetState>();
 }
 
-export async function dedupeLookup(env: Env, key: string): Promise<number | null> {
+/**
+ * Ask for the right to create this exact measurement.
+ *
+ * Returns the existing measurement if an identical one was created recently,
+ * `pending` if another request is creating it right now, or `claimed` if this
+ * caller should go ahead. Lookup and claim are one call so that two concurrent
+ * identical requests cannot both miss and both spend credits.
+ */
+export async function dedupeClaim(env: Env, key: string): Promise<DedupeClaim> {
   const res = await budget(env).fetch(`https://budget/dedupe?key=${encodeURIComponent(key)}`);
-  return (await res.json<{ measurementId: number | null }>()).measurementId;
+  return res.json<DedupeClaim>();
 }
 
-export async function dedupeStore(env: Env, key: string, measurementId: number): Promise<void> {
-  await budget(env).fetch(`https://budget/dedupe?key=${encodeURIComponent(key)}&id=${measurementId}`);
+/** Read-only check, for waiting on whoever holds the claim. */
+export async function dedupePeek(env: Env, key: string): Promise<number | null> {
+  const res = await budget(env).fetch(`https://budget/dedupe/peek?key=${encodeURIComponent(key)}`);
+  return (await res.json<{ measurementId?: number }>()).measurementId ?? null;
 }
 
 /** Stable fingerprint of "the same question", so two callers share one answer. */

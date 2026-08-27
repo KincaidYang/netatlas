@@ -5,15 +5,16 @@ import { AtlasClient } from "../atlas";
 import { buildDescription } from "../describe";
 import {
   QUOTA,
+  dedupeClaim,
   dedupeKey,
-  dedupeLookup,
-  dedupeStore,
   identify,
+  markCreated,
   rateCheck,
   rejectBudget,
   rejectRate,
   releaseCredits,
   reserveCredits,
+  settleMeasurement,
   type Caller,
 } from "../gate";
 import { kindFor } from "../measurements";
@@ -41,6 +42,27 @@ function selectedNodes(body: CreateBody): string[] {
   return list;
 }
 
+/** How long a request will wait behind another one already creating the same measurement. */
+const DEDUPE_WAIT_MS = 8000;
+
+/**
+ * Either the measurement to reuse, or null meaning "go ahead and create it".
+ *
+ * A miss claims the key for this caller, so concurrent identical requests
+ * queue here instead of each buying its own copy of the same answer. Waiting
+ * out the window without a claim is a deliberate fallback: a stalled holder
+ * should cost one duplicate measurement, not a stuck request.
+ */
+async function claimOrReuse(env: Env, key: string): Promise<number | null> {
+  const deadline = Date.now() + DEDUPE_WAIT_MS;
+  for (;;) {
+    const claim = await dedupeClaim(env, key);
+    if (claim.measurementId) return claim.measurementId;
+    if (claim.claimed || Date.now() >= deadline) return null;
+    await sleep(300);
+  }
+}
+
 /**
  * Create a measurement, subject to the whole quota chain.
  *
@@ -50,7 +72,7 @@ function selectedNodes(body: CreateBody): string[] {
  *   3. resolve nodes                      — now we know the true probe count
  *   4. take the token + charge the credits
  *   5. reserve from the global budget     — anonymous callers only
- *   6. create, releasing the reservation if Atlas says no
+ *   6. create, releasing the reservation if anything after step 2 says no
  */
 async function create(env: Env, caller: Caller, body: CreateBody) {
   const kind = kindFor(body.type ?? "ping");
@@ -72,33 +94,42 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
   if (!peek.ok) rejectRate(peek, caller.tier);
 
   const key = await dedupeKey(kind.type, params, nodeIds, perNode);
-  const existing = await dedupeLookup(env, key);
+  const existing = await claimOrReuse(env, key);
   if (existing) return { measurementId: existing, type: kind.type, deduped: true as const };
 
-  // Reads are public, so node resolution always uses the platform key.
-  const selection = await resolveNodes(new AtlasClient(env.ATLAS_API_KEY), nodeIds, perNode, af);
-  const totalProbes = Object.values(selection.requested).reduce((a, b) => a + b, 0);
-  const credits = kind.creditsPerProbe(params) * totalProbes;
-
-  const take = await rateCheck(env, caller, kind.type, credits);
-  if (!take.ok) rejectRate(take, caller.tier);
-
+  // From here on we hold the claim, so every exit has to hand it back.
   const metered = policy.countsAgainstGlobalBudget;
-  if (metered) {
-    const reserved = await reserveCredits(env, credits);
-    if (!reserved.ok) rejectBudget(reserved);
-  }
-
+  let ticket: string | undefined;
+  let credits = 0;
   let measurementId: number;
+  let selection: Awaited<ReturnType<typeof resolveNodes>>;
+  let take: Awaited<ReturnType<typeof rateCheck>>;
   try {
+    // Reads are public, so node resolution always uses the platform key.
+    selection = await resolveNodes(new AtlasClient(env.ATLAS_API_KEY), nodeIds, perNode, af);
+    const totalProbes = Object.values(selection.requested).reduce((a, b) => a + b, 0);
+    credits = kind.creditsPerProbe(params) * totalProbes;
+
+    take = await rateCheck(env, caller, kind.type, credits);
+    if (!take.ok) rejectRate(take, caller.tier);
+
+    if (metered) {
+      const reserved = await reserveCredits(env, credits);
+      if (!reserved.ok) rejectBudget(reserved);
+      ticket = reserved.ticket;
+    }
+
     const definition = kind.buildDefinition(params, buildDescription(kind.type, String(body.target ?? "")));
     measurementId = await new AtlasClient(caller.atlasKey).createMeasurement(definition, selection.probes);
   } catch (err) {
-    if (metered) await releaseCredits(env, credits);
+    // Only give credits back if they were actually reserved — a ticket is
+    // proof of that; without one this just hands the claim back.
+    await releaseCredits(env, ticket ? credits : 0, ticket, key);
     throw err;
   }
 
-  await dedupeStore(env, key, measurementId);
+  // Names the in-flight slot after the measurement and publishes it for de-duplication.
+  await markCreated(env, ticket, measurementId, key);
   return {
     measurementId,
     type: kind.type,
@@ -133,8 +164,10 @@ probe.post("/probe/sync", async (c) => {
   const created = await create(c.env, caller, body);
   const client = new AtlasClient(c.env.ATLAS_API_KEY);
   await poll(client, created.measurementId, Math.min(Number(c.req.query("timeout")) || 20000, 25000));
+  const summary = await report(client, created.measurementId);
+  if (summary.status === "Stopped") await settleMeasurement(c.env, created.measurementId);
   return c.json({
-    ...(await report(client, created.measurementId)),
+    ...summary,
     unavailable: created.unavailable ?? [],
     shareUrl: shareUrl(c.req.raw, created.measurementId),
   });
@@ -159,6 +192,9 @@ probe.get("/m/:id", async (c) => {
   // A stopped one-off never changes again, so a shared link can be served from
   // cache forever instead of re-querying Atlas on every view.
   const settled = body.status === "Stopped";
+  // Loading results is the only reliable signal that a measurement finished,
+  // so this is where its in-flight slot goes back to the pool.
+  if (settled) c.executionCtx.waitUntil(settleMeasurement(c.env, id));
   const res = Response.json(body, {
     headers: { "Cache-Control": settled ? "public, max-age=86400" : "public, max-age=3" },
   });

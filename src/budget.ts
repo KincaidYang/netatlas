@@ -6,12 +6,19 @@ interface Ledger {
   day: string;
   /** Credits we believe we have spent today. */
   spent: number;
-  /** Creation timestamps of measurements still assumed to be running. */
-  inflight: number[];
+  /**
+   * Measurements still assumed to be running, as slot → reservation time.
+   * Keyed `t:<ticket>` between reserving credits and knowing the measurement
+   * id, then `m:<id>` afterwards, so releasing a finished measurement is
+   * idempotent no matter how many times its result page is loaded.
+   */
+  inflight: Record<string, number>;
 }
 
-/** One-off measurements always finish well inside this; stale entries expire. */
+/** Backstop for slots nobody ever released; one-off measurements finish long before. */
 const INFLIGHT_TTL_MS = 10 * 60 * 1000;
+/** How long one caller may hold an unfinished de-duplication claim. */
+const CLAIM_TTL_MS = 20 * 1000;
 
 interface Reconciliation {
   /** Atlas's own `past_day_credits_spent`, the authority. */
@@ -37,6 +44,17 @@ export interface ReserveResult {
   retryAfterSec: number;
   remaining: number;
   limit: number;
+  /** Identifies this reservation until the measurement id is known. */
+  ticket?: string;
+}
+
+export interface DedupeClaim {
+  /** An identical request finished recently; reuse its measurement. */
+  measurementId?: number;
+  /** Another request is creating this exact measurement right now. */
+  pending?: boolean;
+  /** This caller owns the claim and should go ahead and create. */
+  claimed?: boolean;
 }
 
 /**
@@ -65,13 +83,29 @@ export class DailyBudget implements DurableObject {
       case "/reserve":
         return Response.json(await this.reserve(Number(url.searchParams.get("credits") ?? 0)));
       case "/release":
-        return Response.json(await this.release(Number(url.searchParams.get("credits") ?? 0)));
+        return Response.json(
+          await this.release(
+            Number(url.searchParams.get("credits") ?? 0),
+            url.searchParams.get("ticket"),
+            url.searchParams.get("key"),
+          ),
+        );
+      case "/created":
+        return Response.json(
+          await this.created(
+            url.searchParams.get("ticket"),
+            Number(url.searchParams.get("id") ?? 0),
+            url.searchParams.get("key") ?? "",
+          ),
+        );
       case "/settle":
-        return Response.json(await this.settle());
+        return Response.json(await this.settle(Number(url.searchParams.get("id") ?? 0)));
       case "/state":
         return Response.json(await this.snapshot());
       case "/dedupe":
-        return Response.json(await this.dedupe(url.searchParams.get("key") ?? "", url.searchParams.get("id")));
+        return Response.json(await this.claim(url.searchParams.get("key") ?? ""));
+      case "/dedupe/peek":
+        return Response.json(await this.peek(url.searchParams.get("key") ?? ""));
       default:
         return new Response("not found", { status: 404 });
     }
@@ -81,9 +115,11 @@ export class DailyBudget implements DurableObject {
     const today = dayKey();
     const stored = await this.state.storage.get<Ledger>("ledger");
     const cutoff = Date.now() - INFLIGHT_TTL_MS;
-    // Self-expiring rather than explicitly settled: a client that never comes
-    // back to read its results must not leak a slot forever.
-    const inflight = (stored?.inflight ?? []).filter((t) => t > cutoff);
+    // Slots are released explicitly when a measurement is seen to stop; this
+    // only sweeps up after callers who never came back to read their results.
+    const inflight = Object.fromEntries(
+      Object.entries(stored?.inflight ?? {}).filter(([, at]) => at > cutoff),
+    );
     if (stored?.day === today) return { ...stored, inflight };
     return { day: today, spent: 0, inflight };
   }
@@ -127,7 +163,7 @@ export class DailyBudget implements DurableObject {
     const limit = this.limit();
     const spent = await this.effectiveSpent(ledger);
 
-    if (ledger.inflight.length >= MAX_INFLIGHT) {
+    if (Object.keys(ledger.inflight).length >= MAX_INFLIGHT) {
       return { ok: false, reason: "inflight", retryAfterSec: 30, remaining: Math.max(0, limit - spent), limit };
     }
     if (credits > 0 && spent + credits > limit) {
@@ -141,29 +177,53 @@ export class DailyBudget implements DurableObject {
       };
     }
 
+    const ticket = crypto.randomUUID();
     const next: Ledger = {
       ...ledger,
       spent: ledger.spent + Math.max(credits, 0),
-      inflight: [...ledger.inflight, Date.now()],
+      inflight: { ...ledger.inflight, [`t:${ticket}`]: Date.now() },
     };
     await this.state.storage.put("ledger", next);
-    return { ok: true, retryAfterSec: 0, remaining: Math.max(0, limit - (spent + credits)), limit };
+    return { ok: true, ticket, retryAfterSec: 0, remaining: Math.max(0, limit - (spent + credits)), limit };
   }
 
   /** Give the credits back when Atlas refused to create the measurement. */
-  private async release(credits: number): Promise<{ ok: true }> {
+  private async release(credits: number, ticket: string | null, key: string | null): Promise<{ ok: true }> {
     const ledger = await this.ledger();
+    const inflight = { ...ledger.inflight };
+    if (ticket) delete inflight[`t:${ticket}`];
     await this.state.storage.put("ledger", {
       ...ledger,
       spent: Math.max(0, ledger.spent - Math.max(credits, 0)),
-      inflight: ledger.inflight.slice(0, -1),
+      inflight,
     });
+    // Do not leave anyone waiting on a claim that will never be fulfilled.
+    if (key) await this.state.storage.delete(`claim:${key}`);
     return { ok: true };
   }
 
-  private async settle(): Promise<{ ok: true }> {
+  /** Creation succeeded: name the in-flight slot and publish the dedupe entry. */
+  private async created(ticket: string | null, id: number, key: string): Promise<{ ok: true }> {
     const ledger = await this.ledger();
-    await this.state.storage.put("ledger", { ...ledger, inflight: ledger.inflight.slice(0, -1) });
+    const inflight = { ...ledger.inflight };
+    if (ticket) delete inflight[`t:${ticket}`];
+    if (id) inflight[`m:${id}`] = Date.now();
+    await this.state.storage.put("ledger", { ...ledger, inflight });
+    if (key && id) {
+      await this.state.storage.put(`done:${key}`, { id, at: Date.now() });
+      await this.state.storage.delete(`claim:${key}`);
+    }
+    return { ok: true };
+  }
+
+  /** Idempotent: the result page may be loaded any number of times. */
+  private async settle(id: number): Promise<{ ok: true }> {
+    if (!id) return { ok: true };
+    const ledger = await this.ledger();
+    if (!(`m:${id}` in ledger.inflight)) return { ok: true };
+    const inflight = { ...ledger.inflight };
+    delete inflight[`m:${id}`];
+    await this.state.storage.put("ledger", { ...ledger, inflight });
     return { ok: true };
   }
 
@@ -178,7 +238,7 @@ export class DailyBudget implements DurableObject {
       limit,
       spent,
       remaining: Math.max(0, limit - spent),
-      inflight: ledger.inflight.length,
+      inflight: Object.keys(ledger.inflight).length,
       atlasSpent: rec?.atlasSpent ?? null,
       atlasBalance: rec?.balance ?? null,
       reconciledAt: rec ? new Date(rec.checkedAt).toISOString() : null,
@@ -188,18 +248,31 @@ export class DailyBudget implements DurableObject {
   /**
    * Identical request inside the window? Hand back the measurement we already
    * created instead of buying a second copy of the same answer.
+   *
+   * Looking up and claiming happen in one call because creation takes seconds:
+   * a plain read-then-write would let two concurrent identical requests both
+   * miss and both spend credits — exactly the burst de-duplication exists for.
+   * Durable Objects are single-threaded, so this claim is atomic.
    */
-  private async dedupe(key: string, id: string | null): Promise<{ measurementId: number | null }> {
-    if (!key) return { measurementId: null };
-    const storageKey = `dedupe:${key}`;
-    if (id) {
-      await this.state.storage.put(storageKey, { id: Number(id), at: Date.now() });
-      return { measurementId: Number(id) };
-    }
-    const hit = await this.state.storage.get<{ id: number; at: number }>(storageKey);
-    if (!hit || Date.now() - hit.at > DEDUPE_WINDOW_SEC * 1000) {
-      if (hit) await this.state.storage.delete(storageKey);
-      return { measurementId: null };
+  private async claim(key: string): Promise<DedupeClaim> {
+    if (!key) return {};
+    const done = await this.peek(key);
+    if (done.measurementId) return done;
+
+    const held = await this.state.storage.get<number>(`claim:${key}`);
+    if (held && Date.now() - held < CLAIM_TTL_MS) return { pending: true };
+
+    await this.state.storage.put(`claim:${key}`, Date.now());
+    return { claimed: true };
+  }
+
+  private async peek(key: string): Promise<{ measurementId?: number }> {
+    if (!key) return {};
+    const hit = await this.state.storage.get<{ id: number; at: number }>(`done:${key}`);
+    if (!hit) return {};
+    if (Date.now() - hit.at > DEDUPE_WINDOW_SEC * 1000) {
+      await this.state.storage.delete(`done:${key}`);
+      return {};
     }
     return { measurementId: hit.id };
   }
