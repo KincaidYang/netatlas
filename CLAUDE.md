@@ -105,6 +105,14 @@ Gotchas already paid for:
   that meant all 19 probes pinging `203.205.254.157`; with it they reach three
   different addresses. Every kind sets it for hostname targets (`resolveOnProbe()`
   in `src/measurements/kind.ts`), and skips it for IP literals.
+- **DNSSEC needs the DO bit, and AD without it is meaningless.** A DS/DNSKEY
+  query without `set_do_bit` comes back unsigned and the resolver never sets
+  AD, so "did this resolver validate" is invisible. `src/measurements/dnsKind.ts`
+  sets it (plus `udp_payload_size: 4096`, or the signed answer is truncated)
+  for the DNSSEC record types only.
+- **A dns result row does not carry `query_type`.** It is on the measurement,
+  not the row, so the only way `parseRow` can know what was asked is the
+  question the responder echoes back — `parseDnsMessage().questionType`.
 - **No npm deps for parsing.** `src/dns.ts` decodes base64 `abuf` DNS wire
   format and `src/x509.ts` reads DER certificates by hand, both so nothing
   needs `nodejs_compat`. `src/x509.ts` was verified field-by-field against

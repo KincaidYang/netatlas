@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DESCRIPTION_MAX, buildDescription } from "../src/describe";
-import { dns } from "../src/measurements/dnsKind";
+import { dns, SUPPORTED_QUERY_TYPES } from "../src/measurements/dnsKind";
 import { http } from "../src/measurements/http";
 import { ntp } from "../src/measurements/ntp";
 import { ping } from "../src/measurements/ping";
@@ -314,5 +314,49 @@ describe("dns query types", () => {
     const ABUF = "EjSBgAABAAIAAAAAA2RucwZnb29nbGUAAAEAAcAMAAEAAQAAAHsABAgIBATADAABAAEAAAB7AAQICAgI";
     const out = await dns.parseRow(row({ result: { abuf: ABUF, rt: 5 } }));
     expect(dns.summarize([out]).distinctAnswers).toEqual(["A 8.8.4.4", "A 8.8.8.8"]);
+  });
+});
+
+describe("DNSSEC queries", () => {
+  it("sets the DO bit and a bigger payload for signature-bearing types", () => {
+    // Without DO the answer comes back unsigned and the resolver never sets
+    // AD — the one thing a DNSSEC query is asked to find out. And a signed
+    // answer does not fit in the default 512 bytes.
+    for (const qt of ["DS", "DNSKEY", "RRSIG", "NSEC", "NSEC3", "TLSA"]) {
+      const def = dns.buildDefinition(dns.validate({ target: "cloudflare.com", queryType: qt }, {} as never), "d");
+      expect(def, qt).toMatchObject({ set_do_bit: true, udp_payload_size: 4096 });
+    }
+  });
+
+  it("leaves ordinary queries alone", () => {
+    for (const qt of ["A", "AAAA", "MX", "TXT", "HTTPS"]) {
+      const def = dns.buildDefinition(dns.validate({ target: "cloudflare.com", queryType: qt }, {} as never), "d");
+      expect(def, qt).not.toHaveProperty("set_do_bit");
+    }
+  });
+
+  it("accepts every advertised record type", () => {
+    for (const qt of SUPPORTED_QUERY_TYPES) {
+      expect(dns.validate({ target: "cloudflare.com", queryType: qt }, {} as never).queryType).toBe(qt);
+    }
+  });
+
+  it("reports the response code, so an empty answer is not just empty", async () => {
+    const NXDOMAIN = "EjSBgwABAAAAAAAAAngAAAEAAQ==";
+    const out = await dns.parseRow(row({ result: { abuf: NXDOMAIN, rt: 4 } }));
+    expect(out).toMatchObject({ ok: false, error: "NXDOMAIN" });
+    expect(out.detail.rcode).toBe("NXDOMAIN");
+  });
+
+  it("only claims DNSSEC validation when the query asked for it", async () => {
+    const DS = "EjSBoAABAAIAAAABCmNsb3VkZmxhcmUDY29tAAArAAHADAArAAEAABoLACQJQw0CMploOabYCK/j60p5Wg5qejmnb8Uv8iiyK3b21jgm8rnADAAuAAEAABoLAFcAKw0CAAFRgGqXdTxqjipUoeYDY29tAMkdR1StPiQ/8HoaYctMN8MqLMQlvW0WuILcqHgX7sYrwuegk7YbU8TlL1aNKsQq7NN24JCaG2jMKiUn1hGrU/4AACkCAAAAgAAAAA==";
+    // Read from the question the responder echoed back — the result row does
+    // not carry the query type at all.
+    const asked = await dns.parseRow(row({ result: { abuf: DS, rt: 9 } }));
+    expect(asked.detail.authenticated).toBe(true);
+    // AD is meaningless on a query that never carried DO; do not report it.
+    const ABUF_A = "EjSBgAABAAIAAAAAA2RucwZnb29nbGUAAAEAAcAMAAEAAQAAAHsABAgIBATADAABAAEAAAB7AAQICAgI";
+    const notAsked = await dns.parseRow(row({ result: { abuf: ABUF_A, rt: 9 } }));
+    expect(notAsked.detail.authenticated).toBeNull();
   });
 });

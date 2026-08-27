@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDnsAnswers } from "../src/dns";
+import { parseDnsAnswers, parseDnsMessage } from "../src/dns";
 
 /**
  * Every fixture below is a real DNS response captured off the wire from
@@ -92,11 +92,28 @@ describe("parseDnsAnswers", () => {
     expect(dkim.endsWith("QIDAQAB")).toBe(true);
   });
 
+  it("decodes SVCB / HTTPS parameters", () => {
+    // Byte-for-byte what `dig HTTPS cloudflare.com` prints, except that our
+    // IPv6 stays uncompressed — the same form our AAAA records use.
+    expect(data(WIRE.https)).toEqual([
+      '1 . alpn="h3,h2" ipv4hint=104.16.132.229,104.16.133.229 ' +
+        "ipv6hint=2606:4700:0:0:0:0:6810:84e5,2606:4700:0:0:0:0:6810:85e5",
+    ]);
+    expect(parseDnsAnswers(WIRE.https)[0].type).toBe("HTTPS");
+  });
+
   it("falls back to hex for record types it does not model", () => {
-    const [rec] = parseDnsAnswers(WIRE.https);
-    expect(rec.type).toBe("65");
-    expect(rec.data).toMatch(/^[0-9a-f]+$/);
-    expect(rec.data.length).toBe(61 * 2); // rdlength from the wire, two chars a byte
+    // Type 40 (SINK) has no decoder and never will; the bytes are still shown.
+    const bytes = new Uint8Array([
+      0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0, // header: 1 question, 1 answer
+      1, 0x78, 0, // question name "x."
+      0, 40, 0, 1, //   type 40, class IN
+      0xc0, 0x0c, // answer name → pointer to the question
+      0, 40, 0, 1, 0, 0, 0, 60, // type 40, class IN, ttl 60
+      0, 3, 0xaa, 0xbb, 0xcc, // rdlength 3
+    ]);
+    const [rec] = parseDnsAnswers(btoa(String.fromCharCode(...bytes)));
+    expect(rec).toEqual({ name: "x", type: "40", ttl: 60, data: "aabbcc" });
   });
 
   it("returns nothing for a reply with no answer section", () => {
@@ -119,5 +136,74 @@ describe("parseDnsAnswers", () => {
     bytes[13] = 0x0c; // … to itself
     const b64 = btoa(String.fromCharCode(...bytes));
     expect(() => parseDnsAnswers(b64)).not.toThrow();
+  });
+});
+
+/**
+ * DNSSEC responses, captured over TCP with the DO bit set. Every expectation
+ * below is what `dig +dnssec` printed for the same query at capture time.
+ */
+const DNSSEC = {
+  /** cloudflare.com DS — the delegation digest held by the .com zone. */
+  ds: "EjSBoAABAAIAAAABCmNsb3VkZmxhcmUDY29tAAArAAHADAArAAEAABoLACQJQw0CMploOabYCK/j60p5Wg5qejmnb8Uv8iiyK3b21jgm8rnADAAuAAEAABoLAFcAKw0CAAFRgGqXdTxqjipUoeYDY29tAMkdR1StPiQ/8HoaYctMN8MqLMQlvW0WuILcqHgX7sYrwuegk7YbU8TlL1aNKsQq7NN24JCaG2jMKiUn1hGrU/4AACkCAAAAgAAAAA==",
+  /** cloudflare.com DNSKEY — a ZSK, a KSK, and the signature over both. */
+  dnskey: "EjSBoAABAAMAAAABCmNsb3VkZmxhcmUDY29tAAAwAAHADAAwAAEAAAJhAEQBAAMNoJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSMAMADAAAQAAAmEARAEBAw2Z2yzBTKvcM9bXfaY6LxX3ERJYTyNOjR3EKOOeikqX4aonGlVdyQcB4X4qTEtvEgt8MtRPSsAr2JTPLUvnd4oZwAwALgABAAACYQBiADANAgAADhBq3t1Jao5xyQlDCmNsb3VkZmxhcmUDY29tAFLQXQUxlQ3Seov0QesVvFBX/VbfqEQvYfMVK2xNBR8u8ihirsTr9ZsP7PSoWtj4X8qo9iG7JBcT6D5af7EJSd4AACkCAAAAgAAAAA==",
+  /** cloudflare.com NSEC — Cloudflare's "black lies": the next name is one zero byte. */
+  nsec: "EjSBoAABAAIAAAABCmNsb3VkZmxhcmUDY29tAAAvAAHADAAvAAEAAAEsACABAApjbG91ZGZsYXJlA2NvbQAACWINgAxUC40cwAEBwMAMAC4AAQAAASwAYgAvDQIAAAEsapHCHmqPAv6GyQpjbG91ZGZsYXJlA2NvbQABqZqce4BwnobSdGgeEi/fzQQXgJ5yIcDbySbL0NQwgqoZv0TIsw42+7NGCaiEHO1aOhFuRQLn8eIuvA1mmYbOAAApAgAAAIAAAAA=",
+  /** _25._tcp.mail.ietf.org TLSA — a real DANE record. */
+  tlsa: "EjSBoAABAAIAAAABA18yNQRfdGNwBG1haWwEaWV0ZgNvcmcAADQAAcAMADQAAQAAASwAIwMBATiogSahWujmQ86UR8POmodOoOBSVdB+4SIngJ7b5cfxwAwALgABAAABLABcADQNBQAAASxqkcIeao8C/obJBGlldGYDb3JnAKr00R7E3jx18syBL2OkWdRTry+GL4Yw7MO/8nlu2KvYLY+QI9hnOG+Up0wNLfQCNnzRdEBM8OH72hUKmip1BL0AACkCAAAAgAAAAA==",
+};
+
+describe("DNSSEC records", () => {
+  it("decodes DS: key tag, algorithm, digest type, digest", () => {
+    expect(data(DNSSEC.ds)[0]).toBe(
+      "2371 13 2 32996839A6D808AFE3EB4A795A0E6A7A39A76FC52FF228B22B76F6D63826F2B9",
+    );
+  });
+
+  it("decodes DNSKEY: flags, protocol, algorithm, key", () => {
+    const [zsk, ksk] = data(DNSSEC.dnskey);
+    expect(zsk).toBe(
+      "256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
+    );
+    // 257 is the key-signing key — the one the parent's DS points at.
+    expect(ksk.startsWith("257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+")).toBe(true);
+  });
+
+  it("decodes RRSIG, including the timestamps in dig's format", () => {
+    const rrsig = parseDnsAnswers(DNSSEC.ds).find((r) => r.type === "RRSIG")!;
+    expect(rrsig.data.startsWith("DS 13 2 86400 20260902010044 20260825235044 41446 com. ")).toBe(true);
+  });
+
+  it("decodes NSEC, escaping a label that is not printable", () => {
+    // Cloudflare answers "no such name" with a next-name of one zero byte.
+    // A raw NUL has no business reaching the page, so it is escaped as dig
+    // escapes it.
+    expect(data(DNSSEC.nsec)[0]).toBe(
+      "\\000.cloudflare.com. A NS SOA PTR HINFO MX TXT AAAA LOC SRV NAPTR CERT SSHFP " +
+        "RRSIG NSEC DNSKEY TLSA SMIMEA HIP CDS CDNSKEY OPENPGPKEY SVCB HTTPS URI CAA",
+    );
+  });
+
+  it("decodes TLSA", () => {
+    expect(data(DNSSEC.tlsa)[0]).toBe(
+      "3 1 1 38A88126A15AE8E643CE9447C3CE9A874EA0E05255D07EE12227809EDBE5C7F1",
+    );
+  });
+});
+
+describe("parseDnsMessage", () => {
+  it("reads the header, so 'no records' can be told apart from a failure", () => {
+    // NXDOMAIN, SERVFAIL and an empty NOERROR all present as zero answers.
+    expect(parseDnsMessage(DNSSEC.ds)).toMatchObject({ rcode: "NOERROR", truncated: false });
+    expect(parseDnsMessage(WIRE.empty)).toMatchObject({ rcode: "NOERROR", truncated: true });
+  });
+
+  it("reports AD when the resolver validated the answer", () => {
+    for (const abuf of Object.values(DNSSEC)) {
+      expect(parseDnsMessage(abuf).authenticated).toBe(true);
+    }
+    // Captured without the DO bit, so the resolver never set AD.
+    expect(parseDnsMessage(WIRE.a).authenticated).toBe(false);
   });
 });
