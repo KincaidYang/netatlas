@@ -1,5 +1,5 @@
 import type { AtlasResultRow, Env } from "../types";
-import { assertPublicTarget, asString, af, ms, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, ms, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface PingParams {
@@ -29,6 +29,7 @@ export const ping: MeasurementKind<PingParams> = {
       af: p.af,
       target: p.target,
       packets: p.packets,
+      ...resolveOnProbe(p.target),
       description,
       is_oneoff: true,
     };

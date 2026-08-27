@@ -1,5 +1,5 @@
 import type { AtlasResultRow, Env } from "../types";
-import { assertPublicTarget, asString, af, bad, ms, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, bad, ms, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface HttpParams {
@@ -51,6 +51,7 @@ export const http: MeasurementKind<HttpParams> = {
       target: p.target,
       method: p.method,
       path: p.path,
+      ...resolveOnProbe(p.target),
       description,
       is_oneoff: true,
     };

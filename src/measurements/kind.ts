@@ -44,6 +44,24 @@ export function asString(input: Record<string, unknown>, key: string): string {
   return (v as string).trim();
 }
 
+/** A literal address needs no resolving; anything else is a name. */
+export const isIpLiteral = (target: string): boolean => target.includes(":") || /^[\d.]+$/.test(target);
+
+/**
+ * Make each probe resolve the target itself.
+ *
+ * Without this Atlas resolves the name **once, centrally**, and hands the same
+ * address to every probe — so a multi-region run measures the path to one IP
+ * from everywhere instead of what each region actually reaches. For a GeoDNS
+ * or CDN target that is the wrong answer: a probe in China would ping whatever
+ * address Atlas's own resolver picked, which its local DNS would never return.
+ *
+ * The cost is that a probe whose DNS fails reports an error instead of a
+ * latency — which, on a probing platform, is the more useful result.
+ */
+export const resolveOnProbe = (target: string): Record<string, unknown> =>
+  isIpLiteral(target) ? {} : { resolve_on_probe: true };
+
 export function af(input: Record<string, unknown>): 4 | 6 {
   return input.af === 6 || input.af === "6" ? 6 : 4;
 }
