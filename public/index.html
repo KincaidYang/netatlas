@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>netatlas · 全球拨测</title>
+<meta name="description" content="从全球运营商节点同时拨测一个目标，看各地的延迟、丢包、DNS 解析与证书。基于 RIPE Atlas。">
+<link rel="icon" href="/logo.svg" type="image/svg+xml">
+<style>
+/*
+ * Palette, frame and type conventions mirror as205794.net and the looking
+ * glass: paper/ink/magenta, sharp corners, 1.5px ink frames, condensed caps
+ * headings. Three sites, one house.
+ */
+@font-face{font-family:"Plex Mono";src:url(/fonts/plex-mono-400.woff2) format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Plex Mono";src:url(/fonts/plex-mono-600.woff2) format("woff2");font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:"Plex Cond";src:url(/fonts/plex-cond-600.woff2) format("woff2");font-weight:600;font-style:normal;font-display:swap}
+
+:root{
+  --paper:#E9F0F2; --paper-deep:#DDE8EC; --panel:#F3F7F8;
+  --ink:#16303C; --ink-soft:#46606C;
+  --contour:#B7CCD4; --contour-soft:#CDDCE2;
+  --accent:#C2266B; --accent-soft:#F0D9E4;
+  --ok:#1E7A52; --err:#A83236;
+  --mono:"Plex Mono",ui-monospace,SFMono-Regular,Menlo,"PingFang SC","Microsoft YaHei",monospace;
+  --cond:"Plex Cond","Arial Narrow","PingFang SC","Microsoft YaHei",sans-serif;
+  --frame:1.5px solid var(--ink);
+  --hairline:1px solid var(--contour);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --paper:#16303C; --paper-deep:#102630; --panel:#1C3946;
+    --ink:#DCE9EF; --ink-soft:#8FB2C2;
+    --contour:#587888; --contour-soft:#3F5C68;
+    --accent:#F186B5; --accent-soft:#3A2530;
+    --ok:#4FBE8C; --err:#E2836F;
+  }
+}
+*{box-sizing:border-box}
+html{background:var(--paper)}
+body{
+  margin:0 auto; padding:2.5rem 1.25rem 4rem; max-width:64rem;
+  font-family:var(--mono); font-size:.875rem; line-height:1.55; color:var(--ink);
+}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* ── header ─────────────────────────────────────────── */
+body>header{border-bottom:var(--frame);padding-bottom:1.5rem;margin-bottom:2rem}
+.brand{display:inline-flex;align-items:center;gap:.6rem;color:var(--ink);margin-bottom:1.5rem}
+.brand:hover{text-decoration:none}
+.brand img{width:22px;height:22px;display:block}
+.brand b{font-family:var(--cond);font-weight:600;letter-spacing:.04em;font-size:1rem}
+.brand .sub{display:block;font-size:.6875rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft)}
+.eyebrow{font-size:.6875rem;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-soft)}
+h1{margin:.35rem 0 .5rem;font-family:var(--cond);font-size:clamp(1.8rem,5vw,2.6rem);font-weight:600;letter-spacing:.01em;line-height:1.1}
+.lede{margin:0;color:var(--ink-soft);max-width:44rem}
+
+/* ── query form ─────────────────────────────────────── */
+form{margin-top:2rem}
+.promptline{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.prompt{color:var(--accent);white-space:nowrap}
+.prompt::after{content:"▌";animation:blink 1.2s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+select,input[type=text],button{font:inherit;color:inherit;background:var(--panel);border:var(--frame);border-radius:0;padding:.45rem .6rem}
+#target{flex:1 1 16rem;min-width:0}
+button[type=submit]{border-color:var(--accent);color:var(--accent);cursor:pointer;padding-inline:1.1rem;text-transform:uppercase;letter-spacing:.1em;font-size:.75rem}
+button[type=submit]:hover:not(:disabled){background:var(--accent);color:var(--panel)}
+button:disabled{opacity:.45;cursor:not-allowed}
+
+.meterline{display:flex;flex-wrap:wrap;gap:.25rem 1.25rem;margin-top:.7rem;font-size:.75rem;color:var(--ink-soft)}
+.meterline b{color:var(--ink);font-weight:600}
+.meterline .warn{color:var(--err)}
+
+.chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem}
+.chip{font:inherit;font-size:.75rem;letter-spacing:.04em;color:var(--ink-soft);background:none;border:var(--hairline);border-radius:0;padding:.2rem .55rem;cursor:pointer}
+.chip[aria-pressed=true]{color:var(--accent);border-color:var(--accent)}
+.chip[disabled]{opacity:.35;cursor:not-allowed;text-decoration:line-through}
+.chip .n{color:var(--contour);margin-left:.35rem;font-size:.6875rem}
+.chip[aria-pressed=true] .n{color:var(--accent)}
+
+.region{margin-top:1.1rem}
+.region h2{margin:0 0 .45rem;font-family:var(--cond);font-size:.75rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);display:flex;align-items:center;gap:.6rem}
+.region h2::after{content:"";flex:1;border-bottom:var(--hairline)}
+
+.toolbar{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:1.1rem;padding-top:.9rem;border-top:var(--hairline)}
+
+/*
+ * The picker stays shut until asked for. Sixty-odd operator chips are the
+ * reference material, not the task; the task is a target and a button.
+ */
+.picker{margin-top:.75rem;border-top:var(--hairline);padding-top:.6rem}
+.picker>summary{cursor:pointer;color:var(--ink-soft);font-size:.8125rem;list-style:none;display:flex;align-items:baseline;gap:.5rem}
+.picker>summary::-webkit-details-marker{display:none}
+.picker>summary::before{content:"▸";color:var(--accent);font-size:.75rem}
+.picker[open]>summary::before{content:"▾"}
+.picker>summary:hover{color:var(--ink)}
+.picker>summary b{color:var(--ink);font-weight:600}
+.picker>summary #chosen{flex:1;min-width:0}
+.picker>summary .edit{margin-left:auto;text-transform:uppercase;letter-spacing:.08em;font-size:.6875rem;color:var(--accent)}
+details.key{margin-top:.9rem;font-size:.75rem}
+details.key summary{color:var(--ink-soft);cursor:pointer;letter-spacing:.06em;text-transform:uppercase;font-size:.6875rem}
+details.key input{width:100%;max-width:26rem;margin-top:.5rem;font-size:.8125rem}
+details.key p{color:var(--ink-soft);max-width:40rem}
+
+/* ── results ────────────────────────────────────────── */
+main{margin-top:2.5rem}
+.hint{color:var(--ink-soft)}
+.runhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:.75rem;border-bottom:var(--frame);padding-bottom:.6rem;margin-bottom:1.25rem}
+.runhead .kind{font-family:var(--cond);font-weight:600;text-transform:uppercase;letter-spacing:.1em;font-size:.8125rem;color:var(--ink-soft)}
+/* Hostnames are case-sensitive to the eye; never shout them. */
+.runhead .what{font-family:var(--cond);font-weight:600;letter-spacing:.01em;font-size:1.05rem;overflow-wrap:anywhere}
+.runhead .fill{margin-left:auto;color:var(--ink-soft);font-size:.75rem}
+.runhead .fill.partial{color:var(--err)}
+.runhead button{font-size:.6875rem;padding:.15rem .5rem;text-transform:uppercase;letter-spacing:.08em;border:var(--hairline);cursor:pointer;color:var(--ink-soft)}
+.runhead button:hover{border-color:var(--accent);color:var(--accent)}
+
+/*
+ * The signature: one shared scale for every node. The whole point of asking
+ * the same question from many places is comparing the answers, so latency is
+ * drawn as a measuring rule with common ticks rather than 20 loose numbers.
+ */
+.rule{margin:0 0 1.75rem;padding:.9rem 0 0;border-top:var(--hairline);position:relative}
+.rule .axis{position:relative;height:1.1rem;margin-left:11rem;border-bottom:var(--hairline)}
+.rule .tick{position:absolute;top:0;bottom:0;border-left:var(--hairline)}
+.rule .tick span{position:absolute;top:0;left:.25rem;font-size:.6875rem;color:var(--ink-soft)}
+.bar{display:flex;align-items:center;gap:.6rem;padding:.28rem 0}
+.bar .who{width:11rem;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8125rem}
+.bar .track{flex:1;position:relative;height:.75rem}
+.bar .fillbar{position:absolute;left:0;top:50%;height:3px;transform:translateY(-50%);background:var(--ink)}
+.bar .cap{position:absolute;top:50%;width:2px;height:.7rem;transform:translateY(-50%);background:var(--accent)}
+.bar .val{width:5.5rem;flex:none;text-align:right;font-size:.8125rem;font-variant-numeric:tabular-nums}
+.bar.down .fillbar{background:repeating-linear-gradient(90deg,var(--err) 0 4px,transparent 4px 7px)}
+.bar.down .val{color:var(--err)}
+.bar.pending .who,.bar.pending .val{color:var(--contour)}
+
+/* answer-divergence view for dns / sslcert */
+.verdict{font-family:var(--cond);text-transform:uppercase;letter-spacing:.08em;font-size:.8125rem;margin:0 0 1rem}
+.verdict.split{color:var(--accent)}
+.answer{border-left:4px solid var(--contour);padding:.6rem 0 .6rem .85rem;margin-bottom:.9rem}
+.answer.alt{border-left-color:var(--accent)}
+.answer .val{font-weight:600;overflow-wrap:anywhere}
+.answer .who{color:var(--ink-soft);font-size:.8125rem;margin-top:.3rem}
+
+.sheet{background:var(--panel);border:var(--frame);border-left-width:4px;padding:.7rem .9rem;margin-bottom:.55rem;animation:land .25s ease-out}
+@keyframes land{from{opacity:0;transform:translateY(4px)}}
+.sheet.done{border-left-color:var(--ok)}
+.sheet.fail{border-left-color:var(--err)}
+.sheet.wait{border-left-color:var(--contour);opacity:.65}
+.sheet header{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;border:0;padding:0;margin:0}
+.sheet .node{font-family:var(--cond);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.sheet .asn{color:var(--ink-soft);font-size:.75rem}
+.sheet .stamp{margin-left:auto;color:var(--ink-soft);font-size:.75rem;font-variant-numeric:tabular-nums}
+.sheet .stamp.err{color:var(--err)}
+.sheet .body{margin-top:.4rem;font-size:.8125rem;overflow-wrap:anywhere}
+/* Several probes per node: keep them visibly separate, or two identical
+   stat blocks read as a rendering glitch rather than two devices. */
+.sheet .probe+.probe{margin-top:.5rem;padding-top:.5rem;border-top:var(--hairline)}
+.sheet .probe .pid{color:var(--contour);font-size:.6875rem;letter-spacing:.06em}
+.sheet .body dl{display:grid;grid-template-columns:auto 1fr;gap:.15rem .8rem;margin:0}
+.sheet .body dt{color:var(--ink-soft)}
+.sheet .body dd{margin:0;min-width:0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+details.raw{margin-top:.5rem}
+details.raw summary{color:var(--ink-soft);cursor:pointer;font-size:.6875rem;text-transform:uppercase;letter-spacing:.08em}
+pre{margin:.5rem 0 0;padding:.7rem;background:var(--paper);border:var(--hairline);overflow-x:auto;font-size:.75rem;line-height:1.5}
+
+.notice{border:var(--frame);border-left-width:4px;border-left-color:var(--err);padding:.7rem .9rem;background:var(--panel)}
+.notice.info{border-left-color:var(--accent)}
+
+footer{margin-top:4rem;padding-top:1.25rem;border-top:var(--frame);color:var(--ink-soft);display:flex;flex-wrap:wrap;justify-content:space-between;gap:1rem;font-size:.75rem;letter-spacing:.06em}
+footer b{color:var(--ink)}
+
+@media (prefers-reduced-motion:reduce){
+  .prompt::after{animation:none}
+  .sheet{animation:none}
+}
+@media (max-width:640px){
+  .rule .axis{margin-left:0}
+  .bar{flex-wrap:wrap}
+  .bar .who{width:auto;flex:1 1 100%}
+  .bar .val{width:auto}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <a class="brand" href="https://as205794.net">
+    <img src="/logo.svg" alt="">
+    <span><b>netatlas</b><span class="sub">RTTW-NET · RIPE ATLAS</span></span>
+  </a>
+  <p class="eyebrow">PING · DNS · TRACEROUTE · TLS · HTTP · NTP</p>
+  <h1>同一个目标<br>从几十家运营商同时看</h1>
+  <p class="lede">选几个地区的运营商，对一个域名或 IP 发起一次性拨测。探针来自
+  <a href="https://atlas.ripe.net/">RIPE Atlas</a> 遍布全球的真实家宽和机房线路，
+  结果按运营商分组，请求了几个探针、回来几个都如实标出。</p>
+</header>
+
+<form id="q">
+  <div class="promptline">
+    <span class="prompt" aria-hidden="true">atlas@netatlas&gt;</span>
+    <label for="type" hidden>拨测类型</label>
+    <select id="type"></select>
+    <label for="target" hidden>目标</label>
+    <input id="target" type="text" autocomplete="off" spellcheck="false" placeholder="example.com · 1.1.1.1" autofocus>
+    <button type="submit" id="go">开始拨测</button>
+  </div>
+
+  <p class="meterline">
+    <span id="cost">选择节点后估算消耗</span>
+    <span id="quota"></span>
+    <span id="typehint"></span>
+  </p>
+
+  <div class="chips" id="presets"></div>
+
+  <details class="picker" id="picker">
+    <summary><span id="chosen">未选节点</span><span class="edit">挑选节点</span></summary>
+    <div id="regions"></div>
+    <div class="toolbar">
+      <button type="button" class="chip" id="more">展开全部节点</button>
+      <button type="button" class="chip" id="clear">清空</button>
+    </div>
+  </details>
+
+  <details class="key">
+    <summary>用自己的 RIPE Atlas Key（可选）</summary>
+    <p>匿名用量由本站的 Atlas 额度支付，因此有频率和每日上限。填入你自己的 Key
+    后，拨测记在你的账号上，节点数和频率限制都会放宽。Key 只保存在这台设备的浏览器里，
+    服务端只取哈希用作限流标识，不做任何存储。</p>
+    <input id="apikey" type="text" autocomplete="off" spellcheck="false" placeholder="你的 Atlas API Key">
+  </details>
+</form>
+
+<main id="out">
+  <p class="hint">输入一个域名或 IP，然后开始。结果会在 30 秒到几分钟内陆续到齐 —— 探针是真实设备，不是模拟。</p>
+</main>
+
+<footer>
+  <span><b>netatlas</b> · <a href="https://as205794.net">as205794.net</a></span>
+  <span>探针来自 RIPE Atlas · 测量结果在 Atlas 侧公开可见</span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
