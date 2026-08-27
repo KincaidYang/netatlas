@@ -111,10 +111,8 @@ Gotchas already paid for:
   URI, SSHFP, SPF, CDS, CDNSKEY, HINFO, LOC, CERT, DNAME. `SUPPORTED_QUERY_TYPES`
   is that accepted list and nothing else — `src/dns.ts` can *decode* far more
   (SVCB/HTTPS included, which do turn up inside ANY answers), but offering a
-  type Atlas will not take just buys a 400.
-  To re-check the list without spending credits, POST each candidate with
-  `probes: []`: the request always fails, so nothing is billed, but field
-  validation still runs and names the bad `query_type`.
+  type Atlas will not take just buys a 400. The docs do not enumerate this
+  anywhere, which is how CAA stayed broken from Phase A until someone tried it.
 - **DNSSEC needs the DO bit, and AD without it is meaningless.** A DS/DNSKEY
   query without `set_do_bit` comes back unsigned and the resolver never sets
   AD, so "did this resolver validate" is invisible. `src/measurements/dnsKind.ts`
@@ -193,6 +191,36 @@ what the wire actually contains:
 Certificate fixtures are frozen bytes, so their expiry is irrelevant —
 `parseCertificate` only reads fields. The tests that *do* care about "now"
 (expired vs valid) pin the clock with `vi.setSystemTime`.
+
+## Ask the API, not the docs
+
+The REST API is Django REST Framework, so it will describe its own schema:
+
+```bash
+curl -s -X OPTIONS https://atlas.ripe.net/api/v2/measurements/ \
+  -H "Authorization: Key $ATLAS_API_KEY" | jq '.actions.POST'
+```
+
+Every enum field comes back with its exact `choices`. This is the canonical
+answer to "what will Atlas accept", and it is free and instant:
+
+```
+definitions/…/type       ping traceroute dns sslcert http ntp wifi
+definitions/…/query_type A AAAA ANY CNAME DNSKEY DS MX NS NSEC PTR
+                         RRSIG SOA TXT SRV NAPTR TLSA
+definitions/…/protocol   UDP TCP
+definitions/…/method     GET POST HEAD
+definitions/…/query_class IN CHAOS
+probes/…/type            area country probes asn prefix msm region countries
+```
+
+Reach for this before guessing, before reading the docs (which do not
+enumerate most of these), and before probing the API by trial and error. If a
+create call is rejected with `"X" is not a valid choice`, OPTIONS already knew.
+
+Two things it reveals that this codebase deliberately does not use: the `wifi`
+measurement type (needs specific probe firmware, useless for public probing)
+and `POST` for http (which can only target anchors anyway).
 
 ## Commands
 
