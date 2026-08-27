@@ -19,6 +19,8 @@ const state = {
   types: [],
   nodes: [],
   presets: {},
+  /** The result currently on screen, if any. */
+  report: null,
   limits: { maxNodes: 8, maxPerNode: 2 },
   selected: new Set(),
   showingAll: false,
@@ -42,6 +44,12 @@ async function api(path, options = {}) {
 /* ── setup ──────────────────────────────────────────── */
 
 async function init() {
+  // A shared link exists to show one result, so ask for it before anything
+  // else. Queuing it behind the node catalogue (which is the slowest request
+  // on the page) left the result area blank for over a second.
+  const shared = Number(new URLSearchParams(location.search).get("m")) || null;
+  if (shared) load(shared);
+
   $("apikey").value = localStorage.getItem("atlasKey") || "";
   $("apikey").addEventListener("change", () => {
     localStorage.setItem("atlasKey", apiKey());
@@ -59,6 +67,8 @@ async function init() {
   state.presets = presets;
 
   $("type").innerHTML = types.map((t) => `<option value="${t.type}">${esc(t.label)}</option>`).join("");
+  // The result may already be on screen; the type select only exists now.
+  syncFormTo(state.report);
   $("more").textContent = `展开全部 ${nodes.totalCount} 个节点`;
   renderRegions();
   renderPresets();
@@ -77,9 +87,21 @@ async function init() {
     syncChips();
   });
   $("q").addEventListener("submit", submit);
+}
 
-  const shared = new URLSearchParams(location.search).get("m");
-  if (shared) load(Number(shared));
+/**
+ * Make the controls agree with whatever result is on screen, so "run it
+ * again" does the same thing. Called both when a report arrives and when the
+ * type select is finally populated — either can happen first.
+ */
+function syncFormTo(report) {
+  if (!report) return;
+  const select = $("type");
+  if (select.options.length > 0 && select.value !== report.type) {
+    select.value = report.type;
+    syncTypeHint();
+  }
+  if (!$("target").value) $("target").value = String(report.target ?? "").replace(/\.$/, "");
 }
 
 function renderRegions() {
@@ -283,13 +305,8 @@ function stopPolling() {
 /* ── rendering ──────────────────────────────────────── */
 
 function render(report, id) {
-  // A shared link arrives with no form state; make the controls agree with
-  // what is on screen so "run it again" does the same thing.
-  if ($("type").value !== report.type) {
-    $("type").value = report.type;
-    syncTypeHint();
-  }
-  if (!$("target").value) $("target").value = String(report.target ?? "").replace(/\.$/, "");
+  state.report = report;
+  syncFormTo(report);
 
   const partial = report.totalResponded < report.totalRequested;
   const running = report.status !== "Stopped" && partial;
