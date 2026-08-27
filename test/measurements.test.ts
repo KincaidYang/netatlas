@@ -73,10 +73,39 @@ describe("traceroute.parseRow", () => {
   it("keeps timed-out hops in the path rather than collapsing them", async () => {
     const path = (await traceroute.parseRow(row({ dst_addr: "203.0.113.9", result: hops }))).detail.hops;
     expect(path).toEqual([
-      { hop: 1, from: "192.0.2.1", rttMs: 1.234, timeout: false },
-      { hop: 2, from: null, rttMs: null, timeout: true },
-      { hop: 3, from: "203.0.113.9", rttMs: 9.5, timeout: false },
+      { hop: 1, from: "192.0.2.1", rttMs: 1.234, rttMinMs: 1.234, rttMaxMs: 1.234, sent: 1, received: 1, timeout: false },
+      { hop: 2, from: null, rttMs: null, rttMinMs: null, rttMaxMs: null, sent: 2, received: 0, timeout: true },
+      { hop: 3, from: "203.0.113.9", rttMs: 9.5, rttMinMs: 9.5, rttMaxMs: 9.5, sent: 1, received: 1, timeout: false },
     ]);
+  });
+
+  it("counts how many of a hop's probes answered, not just whether one did", async () => {
+    // A real capture: hop 7 answered once out of three. Reporting only the
+    // first reply made it look as solid as a hop that answered three times.
+    const flaky = [
+      { hop: 7, result: [{ from: "192.168.5.1", rtt: 14.502 }, { x: "*" }, { x: "*" }] },
+      { hop: 8, result: [{ from: "10.253.1.161", rtt: 15.106 }, { from: "10.253.1.161", rtt: 14.835 }, { from: "10.253.1.161", rtt: 21.9 }] },
+    ];
+    const path = (await traceroute.parseRow(row({ dst_addr: "1.1.1.1", result: flaky }))).detail
+      .hops as Array<Record<string, unknown>>;
+    expect(path[0]).toMatchObject({ hop: 7, sent: 3, received: 1, rttMs: 14.502 });
+    expect(path[1]).toMatchObject({ hop: 8, sent: 3, received: 3, rttMinMs: 14.835, rttMaxMs: 21.9 });
+    // The fastest reply is the one that best reflects the path.
+    expect(path[1].rttMs).toBe(14.835);
+  });
+
+  it("takes Atlas's own word for whether the destination answered", async () => {
+    // Inferring it from "the last responder equals the destination" is wrong
+    // when the destination answers at an earlier hop.
+    const early = [
+      { hop: 1, result: [{ from: "203.0.113.9", rtt: 5 }] },
+      { hop: 2, result: [{ from: "198.51.100.1", rtt: 6 }] },
+    ];
+    const out = await traceroute.parseRow(
+      row({ dst_addr: "203.0.113.9", destination_ip_responded: true, result: early }),
+    );
+    expect(out.detail.reached).toBe(true);
+    expect(out.ok).toBe(true);
   });
 });
 
@@ -420,5 +449,59 @@ describe("DNSSEC queries", () => {
     const ABUF_A = "EjSBgAABAAIAAAAAA2RucwZnb29nbGUAAAEAAcAMAAEAAQAAAHsABAgIBATADAABAAEAAAB7AAQICAgI";
     const notAsked = await dns.parseRow(row({ result: { abuf: ABUF_A, rt: 9 } }));
     expect(notAsked.detail.authenticated).toBeNull();
+  });
+});
+
+describe("detail worth showing", () => {
+  it("ping records which packet was lost, not only how many", async () => {
+    // Three packets means a single loss reads as 33%, and losing the *first*
+    // is usually the cost of resolving a neighbour or opening firewall state.
+    // In a sample of 36 real rows, 4 were exactly this shape.
+    const out = await ping.parseRow(
+      row({ sent: 3, rcvd: 2, min: 33.217, avg: 33.354, max: 33.491, result: [{ x: "*" }, { rtt: 33.217534 }, { rtt: 33.491486 }] }),
+    );
+    expect(out.detail.packets).toEqual([null, 33.218, 33.491]);
+    expect(out.detail.lossPct).toBe(33.3);
+  });
+
+  it("ping mentions duplicate replies only when there are some", async () => {
+    // dup was 0 in all 36 sampled rows, so it costs nothing until it matters.
+    expect((await ping.parseRow(row({ sent: 3, rcvd: 3, avg: 10, dup: 0 }))).detail.dup).toBeNull();
+    expect((await ping.parseRow(row({ sent: 3, rcvd: 4, avg: 10, dup: 1 }))).detail.dup).toBe(1);
+  });
+
+  it("carries the probe's DNS resolve time on every type that resolves", async () => {
+    // Atlas only reports ttr when the probe resolved the name itself, and it
+    // immediately showed probes spending five seconds on DNS — time a reader
+    // would otherwise attribute to the network.
+    for (const kind of [ping, traceroute, ntp, sslcert, http]) {
+      const out = await kind.parseRow(row({ ttr: 5013.942257, result: [] }));
+      expect(out.detail.resolveMs, kind.type).toBe(5013.942);
+    }
+  });
+
+  it("ntp describes the server well enough to judge it", async () => {
+    // A real row: pool.ntp.org from Germany. ttr is milliseconds here even
+    // though every other time in an ntp row is seconds.
+    const out = await ntp.parseRow(
+      row({
+        stratum: 2, poll: 8, precision: 5.96046e-8, lts: 25, ttr: 8.331877,
+        "ref-ts": 3996838294, timestamp: 1787849507,
+        result: [{ rtt: 0.022411, offset: 0.0068 }, { rtt: 0.019968, offset: 0.007002 }, { rtt: 0.020118, offset: 0.007026 }],
+      }),
+    );
+    expect(out.detail).toMatchObject({
+      pollSec: 256, // log2 seconds on the wire
+      precisionSec: 5.96046e-8,
+      probeClockAgeSec: 25,
+      resolveMs: 8.332,
+    });
+    // How long the server has been running on its own since it last heard
+    // from upstream — a free-running server still advertises a good stratum.
+    expect(out.detail.refAgeSec).toBe(1787849507 - (3996838294 - 2208988800));
+    // The mean hides the spread; the spread is what says whether it is steady.
+    expect(out.detail.offsetMs).toBeCloseTo(6.943, 3);
+    expect(out.detail.offsetMinMs).toBe(6.8);
+    expect(out.detail.offsetMaxMs).toBe(7.026);
   });
 });

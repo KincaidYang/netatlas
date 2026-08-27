@@ -17,6 +17,21 @@ const esc = (s) =>
   String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const ms = (v) => (v == null ? "—" : v < 10 ? `${v.toFixed(1)} ms` : `${Math.round(v)} ms`);
 
+/** NTP clock precision arrives in seconds and is usually nanoseconds' worth. */
+const precision = (sec) => {
+  if (sec == null) return null;
+  const ns = sec * 1e9;
+  if (ns < 1000) return `${Math.round(ns)} ns`;
+  if (ns < 1e6) return `${(ns / 1000).toFixed(1)} µs`;
+  return `${(ns / 1e6).toFixed(1)} ms`;
+};
+
+const age = (sec) => {
+  if (sec < 60) return `${Math.round(sec)} 秒`;
+  if (sec < 3600) return `${Math.round(sec / 60)} 分钟`;
+  return `${(sec / 3600).toFixed(1)} 小时`;
+};
+
 const state = {
   types: [],
   nodes: [],
@@ -532,11 +547,28 @@ function probeBody(p, labelled) {
   const addHtml = (k, html) => html && rows.push([k, html]);
 
   if (d.sent != null) {
-    add("延迟", `${ms(d.min)} / ${ms(d.avg)} / ${ms(d.max)}`);
-    add("丢包", `${d.lossPct}% (${d.rcvd}/${d.sent})`);
+    // One number when the packets agreed; three only when they did not.
+    add("延迟", d.min === d.max ? ms(d.avg) : `${ms(d.min)} / ${ms(d.avg)} / ${ms(d.max)}`);
+    // Losing only the first packet is usually a neighbour lookup or a
+    // firewall opening state, not the path — and with three packets it reads
+    // as an alarming 33%. Say which packet went missing.
+    const seq = Array.isArray(d.packets) ? d.packets : [];
+    const onlyFirst = seq.length > 1 && seq[0] == null && seq.slice(1).every((v) => v != null);
+    add("丢包", `${d.lossPct}% (${d.rcvd}/${d.sent})${onlyFirst ? " · 仅首包" : ""}`);
+    if (seq.length) {
+      addHtml(
+        "逐包",
+        seq.map((v) => (v == null ? '<span class="lost">✕</span>' : esc(ms(v)))).join("　"),
+      );
+    }
+    if (d.dup) add("重复应答", `${d.dup} 个（可能是路由环路或中间设备代答）`);
   }
   if (d.hops) {
-    add("路径", `${d.hopCount} 跳${d.reached ? "，已到达" : "，未到达"}${d.timeouts ? ` · ${d.timeouts} 跳超时` : ""}`);
+    const lossy = d.lossyHops ? ` · ${d.lossyHops} 跳部分丢失` : "";
+    add(
+      "路径",
+      `${d.hopCount} 跳${d.reached ? "，已到达" : "，未到达"}${d.timeouts ? ` · ${d.timeouts} 跳超时` : ""}${lossy}`,
+    );
     add("最后响应", d.lastResponding);
   }
   if (d.status != null) {
@@ -545,7 +577,19 @@ function probeBody(p, labelled) {
   }
   if (d.stratum != null) {
     add("stratum", d.stratum);
-    add("时间偏移", d.offsetMs == null ? null : `${d.offsetMs} ms`);
+    // The mean alone hides how much the packets disagreed.
+    const spread =
+      d.offsetMinMs != null && d.offsetMaxMs != null && d.offsetMinMs !== d.offsetMaxMs
+        ? `（${d.offsetMinMs} – ${d.offsetMaxMs}）`
+        : "";
+    add("时间偏移", d.offsetMs == null ? null : `${d.offsetMs} ms ${spread}`.trim());
+    add("服务器精度", precision(d.precisionSec));
+    add("轮询间隔", d.pollSec == null ? null : `${d.pollSec} 秒`);
+    // A server that has been free-running for hours still advertises a
+    // healthy stratum; this is how you catch that.
+    add("上次同步上游", d.refAgeSec == null ? null : `${age(d.refAgeSec)}前`);
+    // An offset measured by a probe whose own clock is stale means nothing.
+    add("探针时钟", d.probeClockAgeSec == null ? null : `${age(d.probeClockAgeSec)}前同步`);
   }
   if (d.subjectCN) {
     add("证书", d.subjectCN);
@@ -566,12 +610,29 @@ function probeBody(p, labelled) {
   if (d.authenticated === true) add("DNSSEC", "已验证 · AD");
   else if (d.authenticated === false) add("DNSSEC", "未验证");
   if (p.error) addHtml("错误", `<span class="stamp err">${esc(p.error)}</span>`);
+  // Since each probe resolves the target itself, part of what looks like
+  // latency can be DNS. Five-second resolves are real and show up here.
+  if (d.resolveMs != null) {
+    addHtml("解析耗时", `<span class="${d.resolveMs > 1000 ? "slow" : ""}">${esc(ms(d.resolveMs))}</span>`);
+  }
   add("目标 IP", d.dstAddr);
 
   const dl = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
   const raw = d.hops
     ? `<details class="raw"><summary>逐跳</summary><pre>${esc(
-        d.hops.map((h) => `${String(h.hop).padStart(2)}  ${h.timeout ? "*" : `${h.from}  ${ms(h.rttMs)}`}`).join("\n"),
+        d.hops
+          .map((h) => {
+            // Every hop is probed several times. A hop that answered once out
+            // of three is not the same as one that answered three times.
+            const fill = `${h.received}/${h.sent}`.padEnd(5);
+            if (h.timeout) return `${String(h.hop).padStart(2)}  ${"*".padEnd(18)}${fill}`;
+            const range =
+              h.rttMinMs != null && h.rttMaxMs != null && h.rttMinMs !== h.rttMaxMs
+                ? `${ms(h.rttMinMs)} – ${ms(h.rttMaxMs)}`
+                : ms(h.rttMs);
+            return `${String(h.hop).padStart(2)}  ${String(h.from).padEnd(18)}${fill}${range}`;
+          })
+          .join("\n"),
       )}</pre></details>`
     : "";
   return `<div class="probe">${tag}<dl>${dl}</dl>${raw}</div>`;

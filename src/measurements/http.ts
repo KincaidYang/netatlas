@@ -1,5 +1,5 @@
 import type { AtlasResultRow, Env } from "../types";
-import { assertPublicTarget, asString, af, bad, ms, resolveOnProbe, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, bad, ms, resolveMs, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface HttpParams {
@@ -61,9 +61,11 @@ export const http: MeasurementKind<HttpParams> = {
     if (row.error) return { ok: false, rttMs: null, error: stringifyError(row.error), detail: {} };
     const results = Array.isArray(row.result) ? (row.result as Array<Record<string, unknown>>) : [];
     const first = results[0];
-    if (!first) return { ok: false, rttMs: null, error: "no response", detail: {} };
+    // Resolution happened before the request failed; keep its timing.
+    const dns = { resolveMs: resolveMs(row) };
+    if (!first) return { ok: false, rttMs: null, error: "no response", detail: dns };
     if (first.err) {
-      return { ok: false, rttMs: null, error: stringifyError(first.err), detail: {} };
+      return { ok: false, rttMs: null, error: stringifyError(first.err), detail: dns };
     }
     const status = typeof first.res === "number" ? first.res : null;
     return {
@@ -77,6 +79,7 @@ export const http: MeasurementKind<HttpParams> = {
         bodyBytes: typeof first.bsize === "number" ? first.bsize : null,
         dstAddr: typeof first.dst_addr === "string" ? first.dst_addr : null,
         uri: typeof row.uri === "string" ? row.uri : null,
+        resolveMs: resolveMs(row),
       },
     };
   },

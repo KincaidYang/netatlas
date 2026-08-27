@@ -1,5 +1,5 @@
 import type { AtlasResultRow, Env } from "../types";
-import { assertPublicTarget, asString, af, ms, resolveOnProbe, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, ms, resolveMs, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface PingParams {
@@ -43,6 +43,13 @@ export const ping: MeasurementKind<PingParams> = {
     // measurement", not a negative round-trip time.
     const stat = (v: unknown) => (rcvd > 0 ? ms(v) : null);
     const avg = stat(row.avg);
+    // Which packet was lost, not just how many. With three packets a single
+    // lost first packet reads as 33% loss, and a lost *first* packet is
+    // usually the cost of resolving a neighbour or opening firewall state
+    // rather than anything wrong with the path.
+    const packets = (Array.isArray(row.result) ? (row.result as Array<Record<string, unknown>>) : []).map(
+      (p) => ms(p.rtt),
+    );
     return {
       ok: rcvd > 0,
       rttMs: avg,
@@ -54,7 +61,13 @@ export const ping: MeasurementKind<PingParams> = {
         min: stat(row.min),
         avg,
         max: stat(row.max),
+        packets,
+        // Duplicate replies mean something is answering twice: a routing loop,
+        // a broken NAT, a middlebox. Rare, so it is only worth showing when
+        // it is not zero.
+        dup: typeof row.dup === "number" && row.dup > 0 ? row.dup : null,
         ttl: typeof row.ttl === "number" ? row.ttl : null,
+        resolveMs: resolveMs(row),
         dstAddr: typeof row.dst_addr === "string" ? row.dst_addr : null,
       },
     };

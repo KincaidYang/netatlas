@@ -1,6 +1,6 @@
 import type { AtlasResultRow, Env } from "../types";
 import { parseCertificate, pemToDer, sha256Hex, type CertInfo } from "../x509";
-import { assertPublicTarget, asString, af, bad, isIpLiteral, ms, resolveOnProbe, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, bad, isIpLiteral, ms, resolveMs, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface SslParams {
@@ -52,13 +52,17 @@ export const sslcert: MeasurementKind<SslParams> = {
 
   async parseRow(row: AtlasResultRow): Promise<ProbeOutcome> {
     if (row.error) return { ok: false, rttMs: null, error: stringifyError(row.error), detail: {} };
-    if (row.err) return { ok: false, rttMs: null, error: stringifyError(row.err), detail: {} };
+    // The name was resolved before any of these failures, so how long that
+    // took is still worth reporting — a five-second resolve followed by a
+    // refused connection is a different story from a fast one.
+    const dns = { resolveMs: resolveMs(row) };
+    if (row.err) return { ok: false, rttMs: null, error: stringifyError(row.err), detail: dns };
     if (row.alert) {
-      return { ok: false, rttMs: ms(row.rt), error: `TLS alert: ${stringifyError(row.alert)}`, detail: {} };
+      return { ok: false, rttMs: ms(row.rt), error: `TLS alert: ${stringifyError(row.alert)}`, detail: dns };
     }
 
     const chain = Array.isArray(row.cert) ? (row.cert as string[]) : [];
-    if (chain.length === 0) return { ok: false, rttMs: ms(row.rt), error: "no certificate", detail: {} };
+    if (chain.length === 0) return { ok: false, rttMs: ms(row.rt), error: "no certificate", detail: dns };
 
     let info: CertInfo | null = null;
     let fingerprint: string | null = null;
@@ -92,6 +96,7 @@ export const sslcert: MeasurementKind<SslParams> = {
         fingerprint,
         chainLength: chain.length,
         tlsVersion: typeof row.ver === "string" ? row.ver : null,
+        resolveMs: resolveMs(row),
         dstAddr: typeof row.dst_addr === "string" ? row.dst_addr : null,
       },
     };

@@ -1,5 +1,5 @@
 import type { AtlasResultRow, Env } from "../types";
-import { assertPublicTarget, asString, af, ms, resolveOnProbe, rttStats, stringifyError } from "./kind";
+import { assertPublicTarget, asString, af, ms, resolveMs, resolveOnProbe, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export interface TracerouteParams {
@@ -11,7 +11,14 @@ export interface TracerouteParams {
 interface Hop {
   hop: number;
   from: string | null;
+  /** Fastest reply, which is the one that best reflects the path. */
   rttMs: number | null;
+  /** Spread across the replies that came back; null when only one did. */
+  rttMinMs: number | null;
+  rttMaxMs: number | null;
+  /** Atlas probes each hop several times; say how many answered. */
+  sent: number;
+  received: number;
   timeout: boolean;
 }
 
@@ -52,19 +59,32 @@ export const traceroute: MeasurementKind<TracerouteParams> = {
     const hops: Hop[] = [];
     for (const h of raw) {
       const replies = Array.isArray(h.result) ? (h.result as Array<Record<string, unknown>>) : [];
-      // Each hop is probed several times; take the first reply that answered.
-      const answered = replies.find((r) => typeof r.from === "string");
+      // Every hop is probed several times. Reporting only the first reply made
+      // a hop that answered once out of three look as solid as one that
+      // answered three times out of three — the same thing the node-level
+      // requested/responded counts exist to prevent, one level down.
+      const answered = replies.filter((r) => typeof r.from === "string");
+      const rtts = answered.map((r) => ms(r.rtt)).filter((v): v is number => v !== null);
       hops.push({
         hop: Number(h.hop ?? hops.length + 1),
-        from: answered ? (answered.from as string) : null,
-        rttMs: answered ? ms(answered.rtt) : null,
-        timeout: !answered,
+        from: answered.length ? (answered[0].from as string) : null,
+        rttMs: rtts.length ? Math.min(...rtts) : null,
+        rttMinMs: rtts.length ? Math.min(...rtts) : null,
+        rttMaxMs: rtts.length ? Math.max(...rtts) : null,
+        sent: replies.length,
+        received: answered.length,
+        timeout: answered.length === 0,
       });
     }
 
     const dst = typeof row.dst_addr === "string" ? row.dst_addr : null;
     const last = [...hops].reverse().find((h) => h.from !== null) ?? null;
-    const reached = last !== null && dst !== null && last.from === dst;
+    // Atlas states this itself; inferring it from "the last responder equals
+    // the destination" gets it wrong when the destination answers earlier.
+    const reached =
+      typeof row.destination_ip_responded === "boolean"
+        ? row.destination_ip_responded
+        : last !== null && dst !== null && last.from === dst;
 
     return {
       ok: reached,
@@ -77,6 +97,9 @@ export const traceroute: MeasurementKind<TracerouteParams> = {
         reached,
         lastResponding: last ? last.from : null,
         timeouts: hops.filter((h) => h.timeout).length,
+        // Hops that answered some but not all of their probes.
+        lossyHops: hops.filter((h) => h.received > 0 && h.received < h.sent).length,
+        resolveMs: resolveMs(row),
       },
     };
   },
