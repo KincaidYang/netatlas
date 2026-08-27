@@ -1,4 +1,13 @@
 # Copy to `.dev.vars` for `wrangler dev`. Never commit `.dev.vars`.
 ATLAS_API_KEY="your-ripe-atlas-api-key"
-# Optional: protect the API so randoms can't burn your Atlas credits.
-# API_TOKEN="some-long-random-string"
+
+# Optional: guards /admin/* (budget inspection, forced catalogue refresh).
+# ADMIN_TOKEN="some-long-random-string"
+
+# Optional: global anonymous credit budget per UTC day. Defaults to 120000,
+# which is deliberately below the account's daily credit income.
+# PUBLIC_DAILY_CREDITS="120000"
+
+# Optional: set to "1" only if RIPE has whitelisted this account for
+# non-anchor HTTP measurements. Leave unset otherwise.
+# ALLOW_ANY_HTTP_TARGET="1"
