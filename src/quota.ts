@@ -36,7 +36,9 @@ export const QUOTA: Record<Tier, TierPolicy> = {
   anon: {
     job: { capacity: 5, refillSeconds: 120 },
     traceroute: { capacity: 2, refillSeconds: 300 },
-    maxNodes: 8,
+    // Must be >= the largest shipped preset, or the console's default
+    // selection is rejected before it can create anything.
+    maxNodes: 10,
     maxPerNode: 2,
     dailyCredits: 5000,
     countsAgainstGlobalBudget: true,

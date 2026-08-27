@@ -19,6 +19,7 @@ const state = {
   types: [],
   nodes: [],
   presets: {},
+  limits: { maxNodes: 8, maxPerNode: 2 },
   selected: new Set(),
   showingAll: false,
   timer: null,
@@ -61,9 +62,9 @@ async function init() {
   $("more").textContent = `展开全部 ${nodes.totalCount} 个节点`;
   renderRegions();
   renderPresets();
+  await refreshQuota();
   applyPreset("global");
   document.querySelector('[data-preset="global"]')?.setAttribute("aria-pressed", "true");
-  refreshQuota();
   syncTypeHint();
 
   $("type").addEventListener("change", () => {
@@ -103,7 +104,16 @@ function renderRegions() {
   for (const chip of document.querySelectorAll("[data-node]")) {
     chip.addEventListener("click", () => {
       const id = chip.dataset.node;
-      state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id);
+      if (state.selected.has(id)) {
+        state.selected.delete(id);
+      } else if (state.selected.size >= state.limits.maxNodes) {
+        return notice(
+          `当前身份一次最多选 ${state.limits.maxNodes} 个节点。填入自己的 Atlas Key 可以放宽。`,
+          "info",
+        );
+      } else {
+        state.selected.add(id);
+      }
       syncChips();
     });
   }
@@ -137,7 +147,10 @@ const presetLabel = (name) => PRESET_LABELS[name] || name;
 function applyPreset(name) {
   const ids = state.presets[name];
   if (!ids) return;
-  state.selected = new Set(ids.filter((id) => state.nodes.some((n) => n.id === id && n.probes > 0)));
+  const usable = ids.filter((id) => state.nodes.some((n) => n.id === id && n.probes > 0));
+  // Presets are shared with API callers and can be larger than this caller's
+  // tier allows; trim rather than let the server reject the default flow.
+  state.selected = new Set(usable.slice(0, state.limits.maxNodes));
   syncChips();
 }
 
@@ -194,6 +207,11 @@ function syncTypeHint() {
 async function refreshQuota() {
   try {
     const q = await api("/quota");
+    state.limits = { maxNodes: q.maxNodes, maxPerNode: q.maxPerNode };
+    if (state.selected.size > q.maxNodes) {
+      state.selected = new Set([...state.selected].slice(0, q.maxNodes));
+      syncChips();
+    }
     const daily = q.creditsLimit ? ` · 今日已用 ${q.creditsUsedToday}/${q.creditsLimit}` : "";
     $("quota").innerHTML =
       q.tier === "byok"
