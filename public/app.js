@@ -5,7 +5,9 @@
 const API = "/api/v1";
 const PER_NODE = 2;
 const POLL_MS = 3000;
-const POLL_LIMIT_MS = 3 * 60 * 1000;
+/** Ceiling once results stop arriving; see load(). */
+const POLL_MAX_MS = 20000;
+const POLL_LIMIT_MS = 5 * 60 * 1000;
 
 /** Types whose story is "how long did it take"; the rest are "what came back". */
 const LATENCY_TYPES = new Set(["ping", "traceroute", "http", "ntp"]);
@@ -21,6 +23,8 @@ const state = {
   presets: {},
   /** The result currently on screen, if any. */
   report: null,
+  /** Whether the result on screen is still being refreshed. */
+  polling: false,
   limits: { maxNodes: 8, maxPerNode: 2 },
   selected: new Set(),
   showingAll: false,
@@ -279,27 +283,52 @@ async function submit(event) {
   }
 }
 
+/**
+ * Poll until the measurement settles, backing off when nothing is happening.
+ *
+ * A node that under-fills is normal, not a reason to keep asking: China has
+ * ~65 connected probes nationwide, so "19/20 responded" is often the final
+ * answer and the twentieth is never coming. Every three seconds for minutes
+ * on end is then pure waste — three Atlas round trips a poll, none of them
+ * cacheable while the measurement is unfinished.
+ *
+ * So the interval stays at 3s while results are still arriving and grows to
+ * 20s once the count stops moving. Atlas flips a one-off to Stopped a few
+ * minutes in, which is what actually ends the loop.
+ */
 function load(id) {
   stopPolling();
   state.startedAt = Date.now();
+  state.polling = true;
+  let delay = POLL_MS;
+  let lastResponded = -1;
+
   const tick = async () => {
     try {
       const report = await api(`/m/${id}`);
+      delay = report.totalResponded === lastResponded ? Math.min(delay * 1.6, POLL_MAX_MS) : POLL_MS;
+      lastResponded = report.totalResponded;
+
+      const done =
+        report.status === "Stopped" ||
+        report.totalResponded >= report.totalRequested ||
+        Date.now() - state.startedAt > POLL_LIMIT_MS;
+      // Set before rendering: the header says whether we are still waiting.
+      state.polling = !done;
       render(report, id);
-      const settled = report.status === "Stopped" || report.totalResponded >= report.totalRequested;
-      if (settled || Date.now() - state.startedAt > POLL_LIMIT_MS) return stopPolling();
+      if (!done) state.timer = setTimeout(tick, delay);
     } catch (err) {
       stopPolling();
       showError(err);
     }
   };
   tick();
-  state.timer = setInterval(tick, POLL_MS);
 }
 
 function stopPolling() {
-  if (state.timer) clearInterval(state.timer);
+  if (state.timer) clearTimeout(state.timer);
   state.timer = null;
+  state.polling = false;
 }
 
 /* ── rendering ──────────────────────────────────────── */
@@ -309,14 +338,23 @@ function render(report, id) {
   syncFormTo(report);
 
   const partial = report.totalResponded < report.totalRequested;
-  const running = report.status !== "Stopped" && partial;
+  const running = state.polling && partial;
   const target = String(report.target ?? "").replace(/\.$/, "");
+  // Say why the number stopped moving, rather than leaving "等待中" on screen
+  // for something that is never going to arrive.
+  const note = running
+    ? " · 等待中"
+    : !partial
+      ? ""
+      : report.status === "Stopped"
+        ? " · 测量已结束"
+        : " · 已停止刷新";
   const head =
     `<div class="runhead">` +
     `<span class="kind">${esc(report.type)}</span>` +
     `<span class="what">${esc(target)}</span>` +
     `<span class="fill${partial && !running ? " partial" : ""}">` +
-    `${report.totalResponded}/${report.totalRequested} 个探针已回${running ? " · 等待中" : ""}</span>` +
+    `${report.totalResponded}/${report.totalRequested} 个探针已回${note}</span>` +
     `<button type="button" id="share">复制链接</button></div>`;
 
   const body = LATENCY_TYPES.has(report.type) ? latencyView(report) : answerView(report);
