@@ -189,16 +189,21 @@ probe.get("/m/:id", async (c) => {
   if (hit) return hit;
 
   const body = await report(new AtlasClient(c.env.ATLAS_API_KEY), id);
-  // A stopped one-off never changes again, so a shared link can be served from
-  // cache forever instead of re-querying Atlas on every view.
   const settled = body.status === "Stopped";
   // Loading results is the only reliable signal that a measurement finished,
   // so this is where its in-flight slot goes back to the pool.
   if (settled) c.executionCtx.waitUntil(settleMeasurement(c.env, id));
+
+  // A stopped one-off never changes again, so a shared link can be served from
+  // cache forever instead of re-querying Atlas on every view. An unfinished
+  // one changes every few seconds, and `no-store` says so in the only way a
+  // zone-level Browser Cache TTL cannot quietly rewrite: anything that keeps
+  // a partial result turns the console's 3s polling into a page that never
+  // updates, which is far worse than one extra round trip to Atlas.
   const res = Response.json(body, {
-    headers: { "Cache-Control": settled ? "public, max-age=86400" : "public, max-age=3" },
+    headers: { "Cache-Control": settled ? "public, max-age=86400" : "no-store" },
   });
-  c.executionCtx.waitUntil(cache.put(cacheKey, res.clone()));
+  if (settled) c.executionCtx.waitUntil(cache.put(cacheKey, res.clone()));
   return res;
 });
 
