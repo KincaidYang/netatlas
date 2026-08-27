@@ -75,6 +75,10 @@ export const bucketFor = (tier: Tier, type: string): { name: string; spec: Bucke
     : { name: "job", spec: QUOTA[tier].job };
 
 export const publicDailyCredits = (raw: string | undefined): number => {
+  // A declared-but-empty variable arrives as "", and Number("") is 0 — which
+  // would silently set the public budget to nothing and 503 every anonymous
+  // caller. Only an explicit number counts as an override.
+  if (raw === undefined || raw.trim() === "") return DEFAULT_PUBLIC_DAILY_CREDITS;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_PUBLIC_DAILY_CREDITS;
 };
