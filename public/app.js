@@ -448,25 +448,43 @@ function answerView(report) {
     if (g.responded === 0) continue;
     const key = signature(report.type, g);
     if (!key) continue;
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key).push(g.label);
+    let b = buckets.get(key);
+    if (!b) buckets.set(key, (b = { who: [], ttlMin: null, ttlMax: null }));
+    b.who.push(g.label);
+    // TTL is each resolver's cache remainder, so it varies everywhere by
+    // design — reported as a range, never used to decide who agrees.
+    const t = g.summary?.ttl;
+    if (t) {
+      b.ttlMin = b.ttlMin === null ? t.min : Math.min(b.ttlMin, t.min);
+      b.ttlMax = b.ttlMax === null ? t.max : Math.max(b.ttlMax, t.max);
+    }
   }
   if (buckets.size === 0) return "";
 
-  const sorted = [...buckets.entries()].sort((a, b) => b[1].length - a[1].length);
+  const sorted = [...buckets.entries()].sort((a, b) => b[1].who.length - a[1].who.length);
+  // Several DNS answers across regions is ordinary GeoDNS, so this states the
+  // fact and leaves it there. Several *certificates* is worth a second look.
+  const split = sorted.length > 1;
   const verdict =
-    sorted.length > 1
-      ? `<p class="verdict split">各地结果不一致 · ${sorted.length} 种</p>`
-      : `<p class="verdict">各地结果一致</p>`;
+    report.type === "dns"
+      ? `<p class="verdict">${split ? `各地返回 ${sorted.length} 组结果` : "各地结果一致"}</p>`
+      : split
+        ? `<p class="verdict split">各地证书不一致 · ${sorted.length} 种</p>`
+        : `<p class="verdict">各地证书一致</p>`;
 
   return (
     verdict +
     sorted
-      .map(
-        ([answer, who], i) =>
+      .map(([answer, b], i) => {
+        const ttl =
+          b.ttlMin === null
+            ? ""
+            : ` · TTL ${b.ttlMin}${b.ttlMax !== b.ttlMin ? `–${b.ttlMax}` : ""}`;
+        return (
           `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${esc(answer)}</div>` +
-          `<div class="who">${who.length} 个节点 · ${esc(who.join("、"))}</div></div>`,
-      )
+          `<div class="who">${b.who.length} 个节点 · ${esc(b.who.join("、"))}${esc(ttl)}</div></div>`
+        );
+      })
       .join("")
   );
 }
@@ -536,8 +554,17 @@ function probeBody(p, labelled) {
     add("指纹", d.fingerprint ? `${d.fingerprint.slice(0, 24)}…` : null);
   }
   if (Array.isArray(d.answers) && d.answers.length) {
-    addHtml("解析", d.answers.map((a) => `${esc(a.type)} ${esc(a.data)}`).join("<br>"));
+    addHtml(
+      "解析",
+      d.answers
+        .map((a) => `${esc(a.type)} ${esc(a.data)}<span class="ttl">ttl ${esc(a.ttl)}</span>`)
+        .join("<br>"),
+    );
   }
+  // NXDOMAIN, SERVFAIL and an empty NOERROR all look alike without this.
+  if (d.rcode && d.rcode !== "NOERROR") add("应答码", d.rcode);
+  if (d.authenticated === true) add("DNSSEC", "已验证 · AD");
+  else if (d.authenticated === false) add("DNSSEC", "未验证");
   if (p.error) addHtml("错误", `<span class="stamp err">${esc(p.error)}</span>`);
   add("目标 IP", d.dstAddr);
 

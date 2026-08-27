@@ -1,11 +1,19 @@
 import type { AtlasResultRow, Env } from "../types";
-import { parseDnsAnswers, type DnsRecord } from "../dns";
+import { parseDnsMessage, type DnsRecord } from "../dns";
 import { assertPublicTarget, asString, af, bad, ms, rttStats, stringifyError } from "./kind";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./kind";
 
 export const SUPPORTED_QUERY_TYPES = [
-  "A", "AAAA", "CNAME", "NS", "SOA", "TXT", "MX", "PTR", "SRV", "CAA",
+  "A", "AAAA", "CNAME", "NS", "SOA", "TXT", "MX", "PTR", "SRV", "CAA", "HTTPS", "SVCB",
+  "DS", "DNSKEY", "RRSIG", "NSEC", "NSEC3", "TLSA",
 ] as const;
+
+/**
+ * Types whose whole point is the signature chain. Asking for them without the
+ * DO bit gets an unsigned answer back and the resolver never sets AD, so the
+ * one thing you came to find out — did this resolver validate — is invisible.
+ */
+const DNSSEC_TYPES = new Set(["DS", "DNSKEY", "RRSIG", "NSEC", "NSEC3", "TLSA"]);
 export type QueryType = (typeof SUPPORTED_QUERY_TYPES)[number];
 
 export interface DnsParams {
@@ -21,6 +29,9 @@ interface ResolverAnswer {
   dst: string | null;
   rttMs: number | null;
   answers: DnsRecord[];
+  rcode?: string;
+  authenticated?: boolean;
+  questionType?: string;
   error?: string;
 }
 
@@ -63,6 +74,12 @@ export const dns: MeasurementKind<DnsParams> = {
       description,
       is_oneoff: true,
     };
+    if (DNSSEC_TYPES.has(p.queryType)) {
+      def.set_do_bit = true;
+      // A signed answer does not fit in 512 bytes; without this it comes back
+      // truncated and the records we asked for are simply missing.
+      def.udp_payload_size = 4096;
+    }
     // Either ask each probe's own resolver (this is what reveals real
     // GeoDNS/CDN scheduling) or pin one server — never both.
     if (p.resolver) def.target = p.resolver;
@@ -84,21 +101,34 @@ export const dns: MeasurementKind<DnsParams> = {
       const dst = typeof s.dst_addr === "string" ? s.dst_addr : null;
       if (s.error) return { dst, rttMs: null, answers: [], error: stringifyError(s.error) };
       const res = s.result as { abuf?: string; rt?: number } | undefined;
+      const msg = res?.abuf ? parseDnsMessage(res.abuf) : null;
       return {
         dst,
         rttMs: ms(res?.rt),
-        answers: res?.abuf ? parseDnsAnswers(res.abuf) : [],
+        answers: msg?.answers ?? [],
+        rcode: msg?.rcode,
+        authenticated: msg?.authenticated,
+        questionType: msg?.questionType,
       };
     });
 
     const primary = resolvers[0];
+    // What was asked is only recoverable from the question the responder
+    // echoed back; the result row itself does not carry the query type.
+    const dnssec = DNSSEC_TYPES.has(primary?.questionType ?? "");
     const answered = resolvers.some((r) => r.answers.length > 0);
+    // An empty NOERROR, an NXDOMAIN and a SERVFAIL are three different facts
+    // that all present as "no records"; say which one it was.
+    const rcode = primary?.rcode;
     return {
       ok: answered,
       rttMs: primary?.rttMs ?? null,
-      error: answered ? undefined : (primary?.error ?? "no answer"),
+      error: answered ? undefined : (primary?.error ?? (rcode && rcode !== "NOERROR" ? rcode : "no answer")),
       detail: {
         answers: primary?.answers ?? [],
+        rcode: rcode || null,
+        // AD only means anything when we asked with the DO bit set.
+        authenticated: dnssec ? (primary?.authenticated ?? null) : null,
         // Only surface the per-resolver breakdown when there really are several.
         resolvers: resolvers.length > 1 ? resolvers : undefined,
       },
@@ -107,13 +137,27 @@ export const dns: MeasurementKind<DnsParams> = {
 
   summarize(outcomes: ProbeOutcome[]): NodeSummary {
     const values = new Set<string>();
+    const ttls: number[] = [];
     for (const o of outcomes) {
       for (const rec of (o.detail.answers as DnsRecord[] | undefined) ?? []) {
         // Keep the record type: a CNAME and an A in one answer are different
         // facts, and comparing bare values across nodes conflates them.
         values.add(`${rec.type} ${rec.data}`);
+        if (Number.isFinite(rec.ttl)) ttls.push(rec.ttl);
       }
     }
-    return { ...rttStats(outcomes.map((o) => o.rttMs)), distinctAnswers: [...values].sort() };
+    const rcodes = [...new Set(outcomes.map((o) => o.detail.rcode).filter(Boolean))] as string[];
+    const validated = outcomes.map((o) => o.detail.authenticated).filter((v) => typeof v === "boolean");
+    return {
+      ...rttStats(outcomes.map((o) => o.rttMs)),
+      distinctAnswers: [...values].sort(),
+      rcodes,
+      // null when the query was not a DNSSEC one; AD would be meaningless.
+      authenticated: validated.length ? validated.every(Boolean) : null,
+      // A TTL is whatever is left of each resolver's cache entry, so it differs
+      // everywhere by design. Reported next to the answers, never part of
+      // deciding whether two nodes agree — that would split every group.
+      ttl: ttls.length ? { min: Math.min(...ttls), max: Math.max(...ttls) } : null,
+    };
   },
 };
