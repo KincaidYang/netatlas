@@ -20,6 +20,18 @@ meta.get("/nodes", async (c) => {
     !!c.env.ADMIN_TOKEN &&
     c.req.header("X-Admin-Token") === c.env.ADMIN_TOKEN;
 
+  // This is the slowest request the console makes — a Durable Object round
+  // trip on every page load — and the catalogue behind it only moves on a 3h
+  // TTL. A short edge cache costs nothing in freshness and takes it off the
+  // critical path. Probe counts here are a display hint anyway; the truth is
+  // the `available` / `unavailable` a real request comes back with.
+  const cache = caches.default;
+  const cacheKey = new Request(url.toString(), { method: "GET" });
+  if (!force) {
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit;
+  }
+
   const stub = c.env.CATALOG.get(c.env.CATALOG.idFromName("v1"));
   const snapshot = await (await stub.fetch(`https://catalog/nodes${force ? "?force=1" : ""}`)).json<CatalogSnapshot>();
 
@@ -27,13 +39,18 @@ meta.get("/nodes", async (c) => {
   // is "is my site reachable from Japan". `?all=1` returns everything.
   const all = url.searchParams.get("all") === "1";
   const nodes = all ? snapshot.nodes : snapshot.nodes.filter((n) => n.featured);
-  return c.json({
-    ...snapshot,
-    tier: all ? "all" : "featured",
-    count: nodes.length,
-    totalCount: snapshot.nodes.length,
-    nodes,
-  });
+  const res = Response.json(
+    {
+      ...snapshot,
+      tier: all ? "all" : "featured",
+      count: nodes.length,
+      totalCount: snapshot.nodes.length,
+      nodes,
+    },
+    { headers: { "Cache-Control": force ? "no-store" : "public, max-age=60" } },
+  );
+  if (!force) c.executionCtx.waitUntil(cache.put(cacheKey, res.clone()));
+  return res;
 });
 
 meta.get("/presets", (c) => c.json(NODE_PRESETS));
