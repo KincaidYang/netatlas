@@ -111,6 +111,7 @@ main{margin-top:2.5rem}
 .runhead .kind{font-family:var(--cond);font-weight:600;text-transform:uppercase;letter-spacing:.1em;font-size:.8125rem;color:var(--ink-soft)}
 /* Hostnames are case-sensitive to the eye; never shout them. */
 .runhead .what{font-family:var(--cond);font-weight:600;letter-spacing:.01em;font-size:1.05rem;overflow-wrap:anywhere}
+.runhead .qt{font-family:var(--cond);font-weight:600;text-transform:uppercase;letter-spacing:.1em;font-size:.8125rem;color:var(--accent)}
 .runhead .resolved{font-size:.75rem;color:var(--ink-soft);font-variant-numeric:tabular-nums}
 .runhead .resolved b{font-weight:600;color:var(--accent)}
 .runhead .fill{margin-left:auto;color:var(--ink-soft);font-size:.75rem}
@@ -204,6 +205,8 @@ footer b{color:var(--ink)}
     <span class="prompt" aria-hidden="true">atlas@netatlas&gt;</span>
     <label for="type" hidden>拨测类型</label>
     <select id="type"></select>
+    <label for="qtype" hidden>记录类型</label>
+    <select id="qtype" hidden></select>
     <label for="target" hidden>目标</label>
     <input id="target" type="text" autocomplete="off" spellcheck="false" placeholder="example.com · 1.1.1.1" autofocus>
     <button type="submit" id="go">开始拨测</button>

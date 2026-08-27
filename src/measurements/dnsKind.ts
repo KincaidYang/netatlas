@@ -109,7 +109,9 @@ export const dns: MeasurementKind<DnsParams> = {
     const values = new Set<string>();
     for (const o of outcomes) {
       for (const rec of (o.detail.answers as DnsRecord[] | undefined) ?? []) {
-        values.add(rec.data);
+        // Keep the record type: a CNAME and an A in one answer are different
+        // facts, and comparing bare values across nodes conflates them.
+        values.add(`${rec.type} ${rec.data}`);
       }
     }
     return { ...rttStats(outcomes.map((o) => o.rttMs)), distinctAnswers: [...values].sort() };

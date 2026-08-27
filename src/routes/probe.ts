@@ -250,6 +250,8 @@ export async function report(client: AtlasClient, id: number) {
     measurementId: id,
     type: meta.type,
     target: meta.target ?? meta.query_argument,
+    // Which record was asked for; a shared dns link is meaningless without it.
+    queryType: meta.query_type,
     status: meta.status?.name ?? "unknown",
     totalRequested: Object.values(requested).reduce((a, b) => a + b, 0),
     totalResponded: results.length,
