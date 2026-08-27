@@ -135,7 +135,10 @@ describe("per-type validation", () => {
 
   it("rejects unsupported DNS query types", () => {
     expect(dns.validate({ target: "example.com", queryType: "aaaa" }, env).queryType).toBe("AAAA");
-    rejects(() => dns.validate({ target: "example.com", queryType: "ANY" }, env), /unsupported queryType/);
+    // ANY is fine — Atlas accepts it. HTTPS is a real record type that Atlas
+    // will not let you ask for, so it has to be turned away here.
+    expect(dns.validate({ target: "example.com", queryType: "any" }, env).queryType).toBe("ANY");
+    rejects(() => dns.validate({ target: "example.com", queryType: "HTTPS" }, env), /unsupported queryType/);
   });
 
   it("validates an explicit DNS resolver like any other target", () => {

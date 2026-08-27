@@ -157,6 +157,18 @@ function readRData(bytes: Uint8Array, dv: DataView, type: number, start: number,
       const value = asciiSlice(bytes, start + 2 + tagLen, len - 2 - tagLen);
       return `${flags} ${tag} "${value}"`;
     }
+    case 13: // HINFO: cpu, os — also what RFC 8482 answers an ANY query with
+      return charStrings(bytes, start, len).map((v) => `"${v}"`).join(" ");
+    case 35: { // NAPTR: order, preference, flags, service, regexp, replacement
+      if (len < 4) return toHex(bytes, start, len);
+      const order = dv.getUint16(start);
+      const preference = dv.getUint16(start + 2);
+      const [flags, service, regexp] = charStrings(bytes, start + 4, len - 4, 3);
+      let p = start + 4;
+      for (const v of [flags, service, regexp]) p += 1 + v.length;
+      const [replacement] = readName(bytes, p);
+      return `${order} ${preference} "${flags}" "${service}" "${regexp}" ${replacement || "."}.`;
+    }
     case 43: // DS: key tag, algorithm, digest type, digest
     case 59: // CDS, same shape
       return len >= 4
@@ -182,17 +194,8 @@ function readRData(bytes: Uint8Array, dv: DataView, type: number, start: number,
     case 64: // SVCB
     case 65: // HTTPS
       return readSvcb(bytes, dv, start, len);
-    case 16: { // TXT (one or more length-prefixed strings)
-      const out: string[] = [];
-      let p = start;
-      const end = start + len;
-      while (p < end) {
-        const l = bytes[p];
-        out.push(asciiSlice(bytes, p + 1, l));
-        p += 1 + l;
-      }
-      return out.join(" ");
-    }
+    case 16: // TXT (one or more length-prefixed strings)
+      return charStrings(bytes, start, len).join(" ");
     default:
       return toHex(bytes, start, len);
   }
@@ -351,6 +354,20 @@ function svcParam(bytes: Uint8Array, dv: DataView, key: number, start: number, l
       return len ? `${name}=${toHex(bytes, start, len)}` : name;
     }
   }
+}
+
+/** A run of length-prefixed strings, as TXT, HINFO and NAPTR all use. */
+function charStrings(bytes: Uint8Array, start: number, len: number, max = Infinity): string[] {
+  const out: string[] = [];
+  let pos = start;
+  const end = start + len;
+  while (pos < end && out.length < max) {
+    const l = bytes[pos];
+    out.push(asciiSlice(bytes, pos + 1, l));
+    pos += 1 + l;
+  }
+  while (out.length < Math.min(max, 3) && max !== Infinity) out.push("");
+  return out;
 }
 
 function readIPv6(bytes: Uint8Array, start: number, len: number): string {

@@ -298,7 +298,7 @@ describe("resolve_on_probe", () => {
 
 describe("dns query types", () => {
   it("carries the caller's record type into the Atlas definition", () => {
-    for (const qt of ["A", "AAAA", "CNAME", "NS", "SOA", "TXT", "MX", "PTR", "SRV", "CAA"]) {
+    for (const qt of SUPPORTED_QUERY_TYPES) {
       const params = dns.validate({ target: "qq.com", queryType: qt }, {} as never);
       expect(dns.buildDefinition(params, "d"), qt).toMatchObject({ query_type: qt, query_class: "IN" });
     }
@@ -322,22 +322,40 @@ describe("DNSSEC queries", () => {
     // Without DO the answer comes back unsigned and the resolver never sets
     // AD — the one thing a DNSSEC query is asked to find out. And a signed
     // answer does not fit in the default 512 bytes.
-    for (const qt of ["DS", "DNSKEY", "RRSIG", "NSEC", "NSEC3", "TLSA"]) {
+    for (const qt of ["DS", "DNSKEY", "RRSIG", "NSEC", "TLSA"]) {
       const def = dns.buildDefinition(dns.validate({ target: "cloudflare.com", queryType: qt }, {} as never), "d");
       expect(def, qt).toMatchObject({ set_do_bit: true, udp_payload_size: 4096 });
     }
   });
 
   it("leaves ordinary queries alone", () => {
-    for (const qt of ["A", "AAAA", "MX", "TXT", "HTTPS"]) {
+    for (const qt of ["A", "AAAA", "MX", "TXT", "NAPTR", "ANY"]) {
       const def = dns.buildDefinition(dns.validate({ target: "cloudflare.com", queryType: qt }, {} as never), "d");
       expect(def, qt).not.toHaveProperty("set_do_bit");
     }
   });
 
-  it("accepts every advertised record type", () => {
+  it("offers exactly the record types Atlas accepts", () => {
+    // Not what DNS defines and not what src/dns.ts can decode — what the
+    // create call will take. Anything else comes back as
+    // `"<TYPE>" is not a valid choice`, which is how CAA was found to have
+    // been broken since it was first offered. Verified by POSTing each
+    // candidate with `probes: []`: always fails, so costs nothing, but still
+    // runs field validation.
+    expect([...SUPPORTED_QUERY_TYPES]).toEqual([
+      "A", "AAAA", "CNAME", "NS", "SOA", "TXT", "MX", "PTR", "SRV", "NAPTR",
+      "DS", "DNSKEY", "RRSIG", "NSEC", "TLSA", "ANY",
+    ]);
     for (const qt of SUPPORTED_QUERY_TYPES) {
       expect(dns.validate({ target: "cloudflare.com", queryType: qt }, {} as never).queryType).toBe(qt);
+    }
+  });
+
+  it("rejects the types Atlas would refuse, before spending a round trip", () => {
+    for (const qt of ["CAA", "HTTPS", "SVCB", "NSEC3", "URI", "SSHFP", "CDS"]) {
+      expect(() => dns.validate({ target: "cloudflare.com", queryType: qt }, {} as never), qt).toThrow(
+        /unsupported queryType/,
+      );
     }
   });
 
