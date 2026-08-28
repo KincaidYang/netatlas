@@ -77,8 +77,8 @@ export class CatalogCache implements DurableObject {
     const query = url.searchParams.get("q")?.trim() ?? "";
 
     const [counts, names, refreshedAt] = await Promise.all([
-      this.loadGroups(),
-      this.state.storage.get<Record<string, string>>("names"),
+      this.loadSharded<Counts[string]>("groups", "counts"),
+      this.loadSharded<string>("names", "names"),
       this.state.storage.get<number>("refreshedAt"),
     ]);
 
@@ -174,43 +174,65 @@ export class CatalogCache implements DurableObject {
       counts[id] = [g.v4, g.v6, dominantV6];
     }
 
-    const names = (await this.state.storage.get<Record<string, string>>("names")) ?? {};
+    const stored = (await this.loadSharded<string>("names", "names")) ?? {};
+    // Keep only names an existing group can display. Without this the map only
+    // ever grows — 25 new holders per sweep, forever, for ASNs that left the
+    // catalogue years ago — and at ~25 bytes each it crosses the 128 KiB
+    // per-value limit somewhere past 5,000 entries. That `put` then throws
+    // before `refreshedAt` advances, so the catalogue is permanently stale and
+    // every page load fires another 30-request sweep at Atlas.
+    const names: Record<string, string> = {};
+    for (const id of Object.keys(counts)) {
+      const asn = id.split("-")[1];
+      if (stored[asn]) names[asn] = stored[asn];
+    }
     await resolveNames(counts, names);
 
-    await this.saveGroups(counts);
-    await this.state.storage.put({ names, refreshedAt: Date.now() });
+    await this.saveSharded("groups", counts);
+    try {
+      await this.saveSharded("names", names);
+    } catch {
+      // Names are cosmetic — an unnamed node reads as ASnnnn and still works.
+      // Losing them must never cost us a refresh, because a refresh that never
+      // lands means every page load sweeps Atlas again.
+    }
+    await this.state.storage.put("refreshedAt", Date.now());
+    // The pre-sharding `counts` and `names` values are deliberately left in
+    // place. They cost a little dead storage and buy a safe rollback: an older
+    // Worker reads them and gets a working, if thinner, catalogue instead of
+    // falling all the way back to the committed seed.
   }
 
   /**
-   * Groups from the sharded keys, falling back to the single `counts` value a
-   * pre-sharding sweep left behind. The fallback holds only pairs with two or
-   * more probes, so search is thinner until the next sweep — degraded, not
-   * broken, which beats an empty catalogue after a deploy.
+   * A sharded map, falling back to the single value a pre-sharding sweep left
+   * behind. For groups that fallback holds only pairs with two or more probes,
+   * so search is thinner until the next sweep — degraded, not broken, which
+   * beats an empty catalogue after a deploy.
    */
-  private async loadGroups(): Promise<Counts | undefined> {
-    const shards = (await this.state.storage.get<number>("groupShards")) ?? 0;
-    if (shards === 0) return this.state.storage.get<Counts>("counts");
-    const keys = Array.from({ length: shards }, (_, i) => `groups:${i}`);
-    const loaded = await this.state.storage.get<Counts>(keys);
-    const merged: Counts = {};
+  private async loadSharded<T>(prefix: string, legacyKey: string): Promise<Record<string, T> | undefined> {
+    const shards = (await this.state.storage.get<number>(`${prefix}Shards`)) ?? 0;
+    if (shards === 0) return this.state.storage.get<Record<string, T>>(legacyKey);
+    const keys = Array.from({ length: shards }, (_, i) => `${prefix}:${i}`);
+    const loaded = await this.state.storage.get<Record<string, T>>(keys);
+    const merged: Record<string, T> = {};
     for (const part of loaded.values()) Object.assign(merged, part);
     return merged;
   }
 
-  private async saveGroups(counts: Counts): Promise<void> {
-    const entries = Object.entries(counts);
+  private async saveSharded(prefix: string, data: Record<string, unknown>): Promise<void> {
+    const entries = Object.entries(data);
     const shards = Math.max(1, Math.ceil(entries.length / SHARD_SIZE));
-    const write: Record<string, unknown> = { groupShards: shards };
+    const write: Record<string, unknown> = { [`${prefix}Shards`]: shards };
     for (let i = 0; i < shards; i++) {
-      write[`groups:${i}`] = Object.fromEntries(entries.slice(i * SHARD_SIZE, (i + 1) * SHARD_SIZE));
+      write[`${prefix}:${i}`] = Object.fromEntries(entries.slice(i * SHARD_SIZE, (i + 1) * SHARD_SIZE));
     }
     await this.state.storage.put(write);
 
-    // A shrinking probe population leaves orphan shards that would otherwise be
-    // merged back in on the next read, resurrecting nodes that no longer exist.
-    const previous = (await this.state.storage.get<number>("groupShardsPrev")) ?? 0;
-    for (let i = shards; i < previous; i++) await this.state.storage.delete(`groups:${i}`);
-    await this.state.storage.put("groupShardsPrev", shards);
+    // A shrinking population leaves orphan shards that would otherwise be
+    // merged back in on the next read, resurrecting entries that are gone.
+    const previous = (await this.state.storage.get<number>(`${prefix}ShardsPrev`)) ?? 0;
+    for (let i = shards; i < previous; i++) await this.state.storage.delete(`${prefix}:${i}`);
+    await this.state.storage.put(`${prefix}ShardsPrev`, shards);
   }
 }
 

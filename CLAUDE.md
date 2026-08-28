@@ -94,10 +94,17 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   or country will find them. The console says so on an empty result; do not
   "fix" this by naming thousands of ASNs on every sweep.
 - The full pair set does not fit one Durable Object value (~130 KB against a
-  128 KiB limit), so `CatalogCache` stores it in `groups:<n>` **shards**. A
-  pre-sharding deployment's single `counts` key is still read as a fallback,
-  which holds only pairs with ≥2 probes — degraded until the next sweep, not
-  broken.
+  128 KiB limit), so `CatalogCache` stores it in `groups:<n>` **shards**. The
+  resolved ASN names are sharded the same way and, more importantly, **pruned
+  to the ASNs the current groups reference**: 25 new holders per sweep with
+  nothing ever removed crosses the same limit somewhere past 5,000 entries —
+  about a month after deploy — and that `put` throwing before `refreshedAt`
+  advances leaves the catalogue permanently stale, so every page load fires
+  another 30-request sweep at Atlas. Writing names is also wrapped in its own
+  try/catch for the same reason: a name is cosmetic, a stuck refresh is not.
+  A pre-sharding deployment's single `counts` / `names` keys are still read as
+  a fallback and deliberately left in place, so a rollback degrades instead of
+  falling back to the committed seed.
 - The continent for a country lives in **one table**, in
   `scripts/build-nodes.mjs`, baked into `data/nodes.json` as `continents`. The
   runtime needs it because a sweep finds pairs the build never saw; without the

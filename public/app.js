@@ -5,6 +5,13 @@
 const API = "/api/v1";
 /** Probes per node when the selection is small enough to afford them. */
 const PER_NODE = 2;
+
+/**
+ * What to assume before /quota answers, and whenever the answer is in doubt.
+ * Too small only trims a selection; too large invites a 400 the caller cannot
+ * see coming, or a bill twice the one displayed.
+ */
+const CAUTIOUS_LIMITS = { maxNodes: 8, maxPerNode: 2, maxProbes: 16 };
 const POLL_MS = 3000;
 /** Ceiling once results stop arriving; see load(). */
 const POLL_MAX_MS = 20000;
@@ -42,11 +49,7 @@ const state = {
   report: null,
   /** Whether the result on screen is still being refreshed. */
   polling: false,
-  /**
-   * Conservative until /quota answers: too small only trims a selection, too
-   * large invites a 400 the caller cannot see coming.
-   */
-  limits: { maxNodes: 8, maxPerNode: 2, maxProbes: 16 },
+  limits: { ...CAUTIOUS_LIMITS },
   selected: new Set(),
   showingAll: false,
   timer: null,
@@ -78,6 +81,10 @@ async function init() {
   $("apikey").value = localStorage.getItem("atlasKey") || "";
   $("apikey").addEventListener("change", () => {
     localStorage.setItem("atlasKey", apiKey());
+    // Drop to the conservative floor *now*. Until /quota answers we do not know
+    // which tier this key buys, and holding the old tier's allowance would let
+    // the console promise something the server is about to refuse.
+    state.limits = { ...CAUTIOUS_LIMITS };
     refreshQuota();
   });
 
@@ -417,22 +424,39 @@ function syncTypeHint() {
     type === "http" ? "xx-xxx.anchors.atlas.ripe.net" : type === "ntp" ? "pool.ntp.org" : "example.com · 1.1.1.1";
 }
 
-async function refreshQuota() {
-  try {
-    const q = await api("/quota");
-    state.limits = { maxNodes: q.maxNodes, maxPerNode: q.maxPerNode, maxProbes: q.maxProbes };
-    if (state.selected.size > q.maxNodes) {
-      state.selected = new Set([...state.selected].slice(0, q.maxNodes));
+/**
+ * The in-flight quota refresh, so a submit can wait for it.
+ *
+ * Limits decide `probesPerNode()`, and that number is both shown to the user
+ * and sent to the server. Submitting against limits that are about to change
+ * means one of two failures: a 400 for a selection the console just allowed,
+ * or — worse, because it is silent — spending twice the credits displayed.
+ */
+let quotaPending = null;
+
+function refreshQuota() {
+  quotaPending = (async () => {
+    try {
+      const q = await api("/quota");
+      state.limits = { maxNodes: q.maxNodes, maxPerNode: q.maxPerNode, maxProbes: q.maxProbes };
+      if (state.selected.size > q.maxNodes) {
+        state.selected = new Set([...state.selected].slice(0, q.maxNodes));
+      }
+      const daily = q.creditsLimit ? ` · 今日已用 ${q.creditsUsedToday}/${q.creditsLimit}` : "";
+      $("quota").innerHTML =
+        q.tier === "byok"
+          ? `使用你自己的 Key · 可选 <b>${q.maxNodes}</b> 个节点`
+          : `匿名额度 <b>${q.tokensLeft}</b>/${q.tokenCapacity} 次${daily}`;
+    } catch {
+      $("quota").textContent = "";
+    } finally {
+      // Unconditionally, not only when the selection had to be trimmed: the
+      // probe budget moves with the tier, so 30 nodes can go from one probe
+      // each to two without the selection changing at all.
       syncChips();
     }
-    const daily = q.creditsLimit ? ` · 今日已用 ${q.creditsUsedToday}/${q.creditsLimit}` : "";
-    $("quota").innerHTML =
-      q.tier === "byok"
-        ? `使用你自己的 Key · 可选 <b>${q.maxNodes}</b> 个节点`
-        : `匿名额度 <b>${q.tokensLeft}</b>/${q.tokenCapacity} 次${daily}`;
-  } catch {
-    $("quota").textContent = "";
-  }
+  })();
+  return quotaPending;
 }
 
 /* ── running ────────────────────────────────────────── */
@@ -446,6 +470,10 @@ async function submit(event) {
   stopPolling();
   $("go").disabled = true;
   $("out").innerHTML = `<p class="hint">正在向 ${esc(target)} 发起拨测…</p>`;
+
+  // A key typed a moment ago may still be in flight. Submitting first would
+  // send the previous tier's perNode against the new tier's ceiling.
+  await quotaPending;
 
   try {
     const created = await api("/probe", {
