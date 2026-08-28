@@ -111,7 +111,7 @@ export class AtlasClient {
   async getProbes(ids: number[]): Promise<Map<number, ProbeMeta>> {
     const map = new Map<number, ProbeMeta>();
     if (ids.length === 0) return map;
-    const url = `/probes/?id__in=${ids.join(",")}&fields=id,country_code,asn_v4,asn_v6,status&page_size=${ids.length}`;
+    const url = `/probes/?id__in=${ids.join(",")}&fields=id,country_code,asn_v4,asn_v6,status,geometry,tags&page_size=${ids.length}`;
     const data = await this.get<{ results?: ProbeMeta[] }>(url, {});
     for (const p of data.results ?? []) map.set(p.id, p);
     return map;

@@ -76,6 +76,68 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   never truth. Truth is the `available` / `unavailable` fields returned by a
   real request.
 
+## Where the city name comes from
+
+A node is one country and one operator, not one place: `resolveNodes()` picks
+randomly from the live pool, so two runs of 中国·电信 can answer from Beijing
+and Guangzhou — most of the RTT spread a reader would otherwise blame on the
+network. Results therefore show each probe's city. It is **display only**; the
+selection unit is still `cc-asn` and there is no `cn-4134@beijing`.
+
+**Atlas does not have city names.** A probe object is exactly `address_v4/v6,
+asn_v4/v6, country_code, description, firmware_version, first/last_connected,
+geometry, id, is_anchor, is_public, prefix_v4/v6, status, total_uptime, tags`.
+`?city=` is not a filter, and — like every unknown filter — Atlas **silently
+ignores it and returns all 60k probes**, so asking is worse than not asking.
+Only *anchors* carry `city`, and there are none in China outside Hong Kong.
+
+So `data/cities.json` is ours, baked by `npm run cities:refresh`:
+
+- **China is hand-written**, in `scripts/build-cities.mjs`, in git, reviewable
+  line by line. GeoNames rows for `CN/HK/MO/TW` are dropped at build time — no
+  third-party gazetteer contributes a Chinese place name. Four county-level
+  probe sites are folded into their prefecture city (淅川→南阳, 石柱→重庆,
+  宁海→宁波, 恒春→屏东) because the county name tells a reader nothing.
+- **Everywhere else is GeoNames**, from which only `name` + coordinates are
+  taken. Its country column is a tie-break key and is **never displayed**; the
+  country/region label always comes from `CN_NAMES` in `scripts/build-nodes.mjs`.
+  Do not "simplify" that into using the data source's own country.
+- `cityFor()` in `src/geo.ts` answers with the nearest entry **within 50 km**
+  and null beyond it. The longitude search widens towards the poles, because a
+  degree of longitude is 111 km at the equator and 39 km at Tromsø — a fixed
+  one-bucket reach silently breaks the 50 km promise in the north.
+- **Use `cityOfProbe()`, not `cityOf()`, on anything derived from a real
+  probe.** It is the one that honours `system-auto-geoip-country`, Atlas's own
+  admission that it placed the probe no better than its country. That tag is not
+  a formality: **all 16 of China's country-tagged probes sit on `113.72, 34.77`,
+  the point GeoIP returns for "somewhere in China", which lands beside
+  Zhengzhou.** Read their coordinates and you report a 16-probe cluster in 郑州
+  that does not exist — this catalogue's second largest, and entirely fictional.
+  The exception is `SINGLE_METRO` (HK/MO/SG): a territory smaller than the match
+  radius is one metro, so the fallback point is still the right answer, and 12
+  of Hong Kong's 61 probes need it.
+- Two build-time rules were paid for with real data, don't undo them:
+  `MIN_POP` is **30,000**, because at 150k the table missed Ashburn (43k) —
+  the densest probe cluster in the US, 80 of them, called 阿灵顿 38 km away;
+  and entries are **swallowed by a neighbour in the same country ≥5× their size
+  within 35 km**, because cities15000 lists Tokyo's 台東 and London's Islington
+  as cities, so without it a Tokyo probe answers 目黒. The same-country half of
+  that test is load-bearing: Kehl (DE, 35k) is 5 km from Strasbourg (FR, 274k),
+  and merging across the border makes a German probe report a French city.
+  Coverage is 96.7% of nameable probes, 100% in China.
+- The coverage report in the build script **mirrors the runtime rules on
+  purpose** — the same match radius, the same longitude reach, the same
+  `SINGLE_METRO` exception. When they drift it stops measuring what ships.
+- **The GeoNames credit is a licence obligation, not decoration.** cities15000
+  is CC BY 4.0 and `data/cities.json` redistributes a derived copy, so the
+  attribution travels in the file itself and appears in the console footer. It
+  goes when the GeoNames half goes, and not before.
+- Do not take Chinese names from the `alternatenames` column of
+  `cities15000.txt` — it is not language-tagged, and it yields 宝安 for 深圳,
+  古龍 for 科隆, ソウル特別市 for 首尔. Real `zh` names need the 203 MB
+  `alternateNamesV2`, which is not worth it; the ~250 metros worth naming are
+  in a hand-written override table instead.
+
 **China has very few probes** (~65 connected nationwide; 电信 11, 联通 10,
 移动 6). Chinese nodes under-fill often — always surface requested-vs-responded
 rather than implying a full result.
@@ -160,7 +222,9 @@ public/index.html      console: markup + the whole design system (inline CSS)
 public/app.js          console behaviour: chips, polling, the two result views
 public/fonts/          self-hosted IBM Plex woff2 — no Google Fonts (blocked in CN)
 data/nodes.json        generated node catalogue + label tables + policy
+data/cities.json       generated coordinate → city-name table
 scripts/build-nodes.mjs  regenerates data/nodes.json from live Atlas data
+scripts/build-cities.mjs regenerates data/cities.json (China by hand, rest GeoNames)
 
 src/index.ts           route assembly, error handling, DO exports
 src/routes/probe.ts    create + results + the quota chain, in that order
@@ -176,6 +240,7 @@ src/atlas.ts           Atlas v2 REST client (no official JS SDK exists)
 src/aggregate.ts       group results by node, delegate parsing to the kind
 src/dns.ts             base64 abuf → records
 src/x509.ts            DER → certificate fields
+src/geo.ts             probe coordinates → city name
 src/describe.ts        the Atlas-side label (cosmetic)
 
 test/                  vitest; fixtures are real captured data, see below
@@ -240,6 +305,8 @@ and `POST` for http (which can only target anchors anyway).
 - `npm test` — vitest, pure functions only (no Workers pool, no network)
 - `npm run typecheck` — `tsc --noEmit`, covers `test/` too
 - `npm run nodes:refresh` — regenerate `data/nodes.json`, then commit it
+- `npm run cities:refresh` — regenerate `data/cities.json`, then commit it. Prints
+  a coverage report (how many live probes the table can name) to stderr
 - `npm run deploy` — `wrangler deploy`
 
 Smoke-testing costs real credits. Use ping with one probe per node (3 credits
