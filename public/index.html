@@ -155,6 +155,15 @@ main{margin-top:2.5rem}
 .sheet .node{font-family:var(--cond);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
 .sheet .asn{color:var(--ink-soft);font-size:.75rem}
 .sheet .cities{color:var(--contour);font-size:.75rem;letter-spacing:.04em}
+.picker .search{margin:.5rem 0 .9rem}
+.picker .search input{width:100%;padding:.5rem .6rem;background:var(--panel);border:var(--frame);color:var(--ink);font:inherit;font-size:.8125rem}
+.picker .search input::placeholder{color:var(--contour)}
+#searchnote{display:block;margin-top:.35rem;color:var(--ink-soft);font-size:.6875rem;letter-spacing:.05em}
+/* A node with a single probe is selectable but honest about it: one probe can
+   go offline between the catalogue sweep and the measurement, and the result
+   is then 0/1 rather than a region that failed. */
+.chip.thin{opacity:.6}
+.chip.thin .n{color:var(--err)}
 .sheet .stamp{margin-left:auto;color:var(--ink-soft);font-size:.75rem;font-variant-numeric:tabular-nums}
 .sheet .stamp.err{color:var(--err)}
 .sheet .body{margin-top:.4rem;font-size:.8125rem;overflow-wrap:anywhere}
@@ -227,6 +236,11 @@ footer b{color:var(--ink)}
 
   <details class="picker" id="picker">
     <summary><span id="chosen">未选节点</span><span class="edit">挑选节点</span></summary>
+    <div class="search">
+      <input type="search" id="nodesearch" autocomplete="off" spellcheck="false"
+        placeholder="搜索 RIPE 全部在线节点：国家、运营商或 ASN（如 电信 / 4134 / cn-4134）">
+      <span id="searchnote"></span>
+    </div>
     <div id="regions"></div>
     <div class="toolbar">
       <button type="button" class="chip" id="more">展开全部节点</button>

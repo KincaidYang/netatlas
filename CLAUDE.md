@@ -67,8 +67,32 @@ Kong, so "香港 · AWS" would silently probe from Virginia. `resolveNodes()` in
 `src/nodes.ts` resolves nodes to **explicit probe ids** at request time, live
 against `status=1`, then emits one `{type:"probes"}` group per node.
 
-- `data/nodes.json` is a **cold-start seed only** (242 nodes / 125 countries,
+- `data/nodes.json` is a **cold-start seed only** (242 nodes / 126 countries,
   62 marked `featured`). Regenerate with `npm run nodes:refresh`.
+- **The catalogue is a curated view, not the universe.** Atlas has connected
+  probes in ~5,000 country×operator pairs; the catalogue offers ~240 of them.
+  The rest are reachable through `GET /nodes?q=<query>`, which searches every
+  stored pair — by id, bare ASN, country name or code, or operator name. This
+  works only because a node id is self-describing: a hit is measurable even
+  though the catalogue never listed it.
+- **Two thirds of those pairs have exactly one probe.** They are offered and
+  marked (dimmed chip, red count), never hidden — a single probe can go offline
+  between the sweep and the measurement, and `0/1` is a fact the reader can act
+  on where a missing node is not.
+- Most of the 4,398 ASNs have **no resolved holder name** — `resolveNames`
+  looks up 25 new ones per sweep — so they read as `AS12345` and only the ASN
+  or country will find them. The console says so on an empty result; do not
+  "fix" this by naming thousands of ASNs on every sweep.
+- The full pair set does not fit one Durable Object value (~130 KB against a
+  128 KiB limit), so `CatalogCache` stores it in `groups:<n>` **shards**. A
+  pre-sharding deployment's single `counts` key is still read as a fallback,
+  which holds only pairs with ≥2 probes — degraded until the next sweep, not
+  broken.
+- The continent for a country lives in **one table**, in
+  `scripts/build-nodes.mjs`, baked into `data/nodes.json` as `continents`. The
+  runtime needs it because a sweep finds pairs the build never saw; without the
+  baked map they rendered under `??`. It covers all 249 ISO codes on purpose —
+  a continent with no nodes simply does not render.
 - At runtime the `CatalogCache` DO re-sweeps Atlas on a 3h TTL. A page load
   *triggers* a refresh but never waits for one — a sweep is 30 requests /
   ~1 MB / ~5s, which is fine every few hours and abusive on every page load.
@@ -230,7 +254,7 @@ src/index.ts           route assembly, error handling, DO exports
 src/routes/probe.ts    create + results + the quota chain, in that order
 src/routes/meta.ts     nodes / presets / types / anchors / quota
 src/measurements/      one file per type + the MeasurementKind contract
-src/nodes.ts           catalogue access, node→probe resolution, presets
+src/nodes.ts           catalogue access, node→probe resolution, presets, search
 src/catalog.ts         CatalogCache DO — TTL sweep of live probe counts
 src/quota.ts           every limit, in one place
 src/gate.ts            identity (anon vs BYOK), quota checks, QuotaError

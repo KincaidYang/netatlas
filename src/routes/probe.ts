@@ -18,7 +18,7 @@ import {
   type Caller,
 } from "../gate";
 import { kindFor } from "../measurements";
-import { NODE_PRESETS, labelFor, nodeKeyFor, requestedFromProbeIds, resolveNodes } from "../nodes";
+import { NODE_PRESETS, labelFor, nodeKeyFor, presetNodes, requestedFromProbeIds, resolveNodes } from "../nodes";
 import type { AtlasParticipationRequest, Env, ProbeMeta } from "../types";
 
 export const probe = new Hono<{ Bindings: Env }>();
@@ -33,7 +33,7 @@ interface CreateBody extends Record<string, unknown> {
 function selectedNodes(body: CreateBody): string[] {
   if (Array.isArray(body.nodes) && body.nodes.length) return body.nodes.map(String);
   const preset = String(body.preset ?? "global");
-  const list = NODE_PRESETS[preset];
+  const list = presetNodes(preset);
   if (!list) {
     throw new HTTPException(400, {
       message: `unknown preset '${preset}'. Known: ${Object.keys(NODE_PRESETS).join(", ")}`,

@@ -23,6 +23,14 @@ export const CATALOG_GENERATED_AT: string = catalog.generatedAt;
 export const SEED_NODES: Node[] = catalog.nodes as Node[];
 export const COUNTRY_NAMES: Record<string, string> = catalog.countries;
 export const OPERATOR_NAMES: Record<string, string> = catalog.operators as Record<string, string>;
+/** ISO country code → continent, baked by the build script from one table. */
+export const CONTINENT_OF: Record<string, string> = catalog.continents as Record<string, string>;
+
+/**
+ * Which continent a country belongs to. `??` only for Atlas's own placeholder
+ * for a probe it could not place — every real ISO code is in the table.
+ */
+export const continentOf = (cc: string): string => CONTINENT_OF[cc.toUpperCase()] ?? "??";
 export const POLICY = catalog.policy as {
   minProbes: number;
   perCountry: number;
@@ -53,6 +61,36 @@ export function labelForId(id: string, names: Record<string, string> = {}): stri
 
 export const nodeById = (id: string): Node | undefined => BY_ID.get(id.toLowerCase());
 
+/**
+ * Does this node answer the search box?
+ *
+ * The catalogue offers ~240 curated nodes; Atlas actually has connected probes
+ * in about 5,000 country×operator pairs. Search is how the other 4,760 are
+ * reachable, so it has to match the several ways someone would name one:
+ * the id (`cn-4134`), a bare ASN (`4134`), the country in Chinese or by code,
+ * or the operator's name. Most of those 4,398 ASNs have no resolved holder —
+ * `resolveNames` only names a handful per sweep — so they read as `AS12345`,
+ * and matching the bare number is what makes them findable at all.
+ */
+export function matchesQuery(node: Node, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  if (node.id.includes(q)) return true;
+  if (node.cc.toLowerCase() === q) return true;
+  if (String(node.asn) === q || `as${node.asn}` === q) return true;
+  if (node.label.toLowerCase().includes(q)) return true;
+  if (node.holder?.toLowerCase().includes(q)) return true;
+  return (COUNTRY_NAMES[node.cc] ?? "").includes(query.trim());
+}
+
+/** Most probes first — a node with one probe is the least useful answer. */
+export function searchNodes(nodes: Node[], query: string, limit: number): Node[] {
+  return nodes
+    .filter((n) => matchesQuery(n, query))
+    .sort((a, b) => b.probes - a.probes || a.id.localeCompare(b.id))
+    .slice(0, limit);
+}
+
 /** Hard ceilings; Phase C's quota layer tightens these per caller. */
 export const MAX_NODES = 25;
 export const MAX_PROBES_PER_NODE = 3;
@@ -60,6 +98,31 @@ export const MAX_TOTAL_PROBES = 60;
 
 /** Named selections, resolved against the real catalogue at build time. */
 export const NODE_PRESETS: Record<string, string[]> = catalog.presets as Record<string, string[]>;
+
+/**
+ * Preset names that used to exist, kept working.
+ *
+ * The console no longer offers 大中华 / 亚太 / 美洲 — they were a different
+ * granularity from the continent sections right below them — but this is a
+ * public, no-login API and `POST /probe {"preset":"greater_china"}` is
+ * something a caller may already have in a script. Answering 400 to those
+ * costs someone a working tool to save us a map. They are resolved but not
+ * listed: `GET /presets` returns the canonical set only.
+ */
+const PRESET_ALIASES: Record<string, string[]> = {
+  greater_china: ["china"],
+  apac: ["asia"],
+  americas: ["north_america", "south_america"],
+};
+
+/** Node ids for a preset name, or null if there is no such preset. */
+export function presetNodes(name: string): string[] | null {
+  const direct = NODE_PRESETS[name];
+  if (direct) return direct;
+  const alias = PRESET_ALIASES[name];
+  if (!alias) return null;
+  return [...new Set(alias.flatMap((n) => NODE_PRESETS[n] ?? []))];
+}
 
 /**
  * Which node a probe belongs to. A probe's v4 and v6 ASNs can differ, so try

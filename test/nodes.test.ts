@@ -6,10 +6,14 @@ import {
   NODE_PRESETS,
   SEED_NODES,
   labelForId,
+  matchesQuery,
   nodeKeyFor,
   parseNodeId,
+  presetNodes,
+  searchNodes,
   requestedFromProbeIds,
   resolveNodes,
+  type Node,
 } from "../src/nodes";
 import type { ProbeMeta } from "../src/types";
 
@@ -180,5 +184,93 @@ describe("catalogue seed", () => {
     for (const n of SEED_NODES) {
       expect(parseNodeId(n.id), n.id).toEqual({ cc: n.cc.toUpperCase(), asn: n.asn });
     }
+  });
+});
+
+describe("presetNodes", () => {
+  it("resolves the continent presets the console shows", () => {
+    for (const name of ["global", "china", "asia", "europe", "north_america", "south_america", "africa", "oceania"]) {
+      expect(presetNodes(name)?.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps retired preset names working for API callers", () => {
+    // The console dropped 大中华 / 亚太 / 美洲, but this is a no-login public
+    // API and someone's script may already send them. 400 there costs a
+    // working tool to save us a map.
+    expect(presetNodes("greater_china")).toEqual(presetNodes("china"));
+    expect(presetNodes("apac")).toEqual(presetNodes("asia"));
+    expect(presetNodes("americas")).toEqual([
+      ...(presetNodes("north_america") ?? []),
+      ...(presetNodes("south_america") ?? []),
+    ]);
+  });
+
+  it("does not advertise the aliases", () => {
+    // GET /presets returns NODE_PRESETS directly, so an alias listed there
+    // would render as a duplicate button in the console.
+    expect(Object.keys(NODE_PRESETS)).not.toContain("greater_china");
+    expect(Object.keys(NODE_PRESETS)).not.toContain("apac");
+  });
+
+  it("returns null for a name that never existed", () => {
+    expect(presetNodes("atlantis")).toBeNull();
+  });
+
+  it("keeps every preset inside the anonymous node ceiling", () => {
+    // A preset larger than QUOTA.anon.maxNodes 400s for exactly the callers
+    // most likely to use one.
+    for (const [name, ids] of Object.entries(NODE_PRESETS)) {
+      expect(ids.length, `preset ${name}`).toBeLessThanOrEqual(10);
+    }
+  });
+});
+
+describe("node search", () => {
+  const node = (id: string, label: string, probes: number, holder: string | null = null): Node => {
+    const [cc, asn] = id.split("-");
+    return { id, cc: cc.toUpperCase(), asn: Number(asn), asnV6: null, label, holder, continent: "亚洲", probes, probesV6: 0 };
+  };
+  const pool = [
+    node("cn-4134", "中国 · 电信", 12),
+    node("tw-3462", "台湾 · 中华电信", 34),
+    node("mn-10219", "蒙古 · AS10219", 1),
+    node("de-3320", "德国 · Deutsche Telekom", 171, "Deutsche Telekom"),
+  ];
+
+  it("finds a node by id, by bare ASN, and by ASN with the prefix", () => {
+    expect(searchNodes(pool, "cn-4134", 10).map((n) => n.id)).toEqual(["cn-4134"]);
+    expect(searchNodes(pool, "10219", 10).map((n) => n.id)).toEqual(["mn-10219"]);
+    expect(searchNodes(pool, "AS10219", 10).map((n) => n.id)).toEqual(["mn-10219"]);
+  });
+
+  it("finds a node by country name and by country code", () => {
+    expect(searchNodes(pool, "蒙古", 10).map((n) => n.id)).toEqual(["mn-10219"]);
+    expect(searchNodes(pool, "de", 10).map((n) => n.id)).toEqual(["de-3320"]);
+  });
+
+  it("finds a node by operator name, in either language", () => {
+    expect(searchNodes(pool, "电信", 10).map((n) => n.id)).toEqual(["tw-3462", "cn-4134"]);
+    expect(searchNodes(pool, "deutsche", 10).map((n) => n.id)).toEqual(["de-3320"]);
+  });
+
+  it("ranks by probe count, because one probe is the least useful answer", () => {
+    expect(searchNodes(pool, "电信", 10).map((n) => n.probes)).toEqual([34, 12]);
+  });
+
+  it("includes single-probe nodes rather than hiding them", () => {
+    // Two thirds of the ~5,000 pairs Atlas has a probe in have exactly one.
+    // They are marked in the console, not withheld.
+    expect(searchNodes(pool, "蒙古", 10)[0].probes).toBe(1);
+  });
+
+  it("returns nothing for an empty or whitespace query", () => {
+    expect(searchNodes(pool, "", 10)).toEqual([]);
+    expect(searchNodes(pool, "   ", 10)).toEqual([]);
+    expect(matchesQuery(pool[0], "")).toBe(false);
+  });
+
+  it("respects the limit", () => {
+    expect(searchNodes(pool, "e", 2).length).toBeLessThanOrEqual(2);
   });
 });

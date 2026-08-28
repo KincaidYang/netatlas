@@ -35,6 +35,7 @@ const age = (sec) => {
 const state = {
   types: [],
   nodes: [],
+  known: new Map(),
   presets: {},
   /** The result currently on screen, if any. */
   report: null,
@@ -82,6 +83,7 @@ async function init() {
   ]);
   state.types = types;
   state.nodes = nodes.nodes;
+  remember(nodes.nodes);
   state.totalNodes = nodes.totalCount;
   state.presets = presets;
 
@@ -95,6 +97,7 @@ async function init() {
   $("more").textContent = `展开全部 ${nodes.totalCount} 个节点`;
   renderRegions();
   renderPresets();
+  wireSearch();
   await refreshQuota();
   applyPreset("global");
   document.querySelector('[data-preset="global"]')?.setAttribute("aria-pressed", "true");
@@ -130,6 +133,33 @@ function syncFormTo(report) {
   if (!$("target").value) $("target").value = String(report.target ?? "").replace(/\.$/, "");
 }
 
+/**
+ * One selectable node. A node with a single probe is dimmed and its count
+ * reddened rather than hidden: search reaches every country×operator pair
+ * Atlas has a probe in, and about two thirds of those have exactly one. It can
+ * still answer, and when it does not the result says 0/1 — which is a fact the
+ * reader can act on. Hiding them would make "全部在线节点" a lie.
+ */
+/**
+ * Every node the console has seen, by id — from the featured list, the full
+ * catalogue, a preset, or a search hit. `state.nodes` is only ever the page
+ * currently rendered, so without this a node selected from search results
+ * would vanish from the "已选" summary the moment the search box was cleared.
+ */
+function remember(nodes) {
+  for (const n of nodes ?? []) state.known.set(n.id, n);
+}
+
+function nodeChip(n) {
+  const thin = n.probes === 1;
+  const hint = n.probes === 0 ? "当前无在线探针" : thin ? "只有 1 个在线探针，可能不出结果" : `${n.probes} 个在线探针`;
+  return (
+    `<button type="button" class="chip${thin ? " thin" : ""}" data-node="${esc(n.id)}" aria-pressed="false"` +
+    `${n.probes === 0 ? " disabled" : ""} title="${esc(n.id)} · ${esc(hint)}">` +
+    `${esc(n.label)}<span class="n">${n.probes}</span></button>`
+  );
+}
+
 function renderRegions() {
   const byRegion = new Map();
   for (const n of state.nodes) {
@@ -138,17 +168,15 @@ function renderRegions() {
   }
   $("regions").innerHTML = [...byRegion.entries()]
     .map(
-      ([region, list]) => `<div class="region"><h2>${esc(region)}</h2><div class="chips">${list
-        .map(
-          (n) =>
-            `<button type="button" class="chip" data-node="${esc(n.id)}" aria-pressed="false"` +
-            `${n.probes === 0 ? " disabled" : ""} title="${esc(n.id)} · ${n.probes} 个在线探针">` +
-            `${esc(n.label)}<span class="n">${n.probes}</span></button>`,
-        )
-        .join("")}</div></div>`,
+      ([region, list]) =>
+        `<div class="region"><h2>${esc(region)}</h2><div class="chips">${list.map(nodeChip).join("")}</div></div>`,
     )
     .join("");
 
+  bindChips();
+}
+
+function bindChips() {
   for (const chip of document.querySelectorAll("[data-node]")) {
     chip.addEventListener("click", () => {
       const id = chip.dataset.node;
@@ -168,6 +196,76 @@ function renderRegions() {
   syncChips();
 }
 
+/**
+ * Search across every country×operator pair Atlas has a connected probe in —
+ * about 5,000, against the ~240 the catalogue curates. The catalogue exists
+ * because 5,000 chips is not a picker; this is how the rest stay reachable.
+ *
+ * Selection needs nothing from the catalogue: a node id is `cc-asn` and
+ * self-describing, so a pair found here is measurable even though no chip for
+ * it was ever rendered.
+ */
+let searchSeq = 0;
+let searchTimer = null;
+
+function wireSearch() {
+  const input = $("nodesearch");
+  input.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    // A keystroke is not a query. 250 ms is under the threshold where typing
+    // feels laggy and well over the rate at which people type.
+    searchTimer = setTimeout(() => runSearch(input.value), 250);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      input.value = "";
+      runSearch("");
+    }
+  });
+}
+
+async function runSearch(query) {
+  const q = query.trim();
+  const seq = ++searchSeq;
+  if (!q) {
+    $("searchnote").textContent = "";
+    return renderRegions();
+  }
+  $("searchnote").textContent = "搜索中…";
+  try {
+    const data = await api(`/nodes?q=${encodeURIComponent(q)}`);
+    // A slower earlier request must not overwrite a newer one's results.
+    if (seq !== searchSeq) return;
+    renderSearch(data);
+  } catch (err) {
+    if (seq === searchSeq) $("searchnote").textContent = `搜索失败：${err.message}`;
+  }
+}
+
+function renderSearch(data) {
+  const nodes = data.nodes ?? [];
+  if (nodes.length === 0) {
+    $("regions").innerHTML = "";
+    // Most of those ASNs have no resolved holder — the catalogue names a
+    // handful per sweep — so they read as "AS12345" and an operator name will
+    // never find them. Saying so beats letting the reader conclude the node
+    // does not exist.
+    $("searchnote").textContent =
+      `没有匹配的节点（已搜索 ${data.searched ?? 0} 个国家×运营商组合）。` +
+      `多数运营商没有名称、只显示 ASN，可以改用 ASN 或国家名搜索`;
+    return;
+  }
+  remember(nodes);
+  const thin = nodes.filter((n) => n.probes === 1).length;
+  $("regions").innerHTML =
+    `<div class="region"><h2>搜索结果</h2><div class="chips">${nodes.map(nodeChip).join("")}</div></div>`;
+  const shown = data.matched > nodes.length ? `显示前 ${nodes.length} / ${data.matched} 个匹配` : `${nodes.length} 个匹配`;
+  $("searchnote").textContent =
+    `${shown}，来自 RIPE 全部 ${data.searched ?? 0} 个国家×运营商组合` +
+    (thin ? `。其中 ${thin} 个只有 1 个在线探针，可能不出结果` : "");
+  bindChips();
+}
+
 function renderPresets() {
   $("presets").innerHTML = Object.keys(state.presets)
     .map((name) => `<button type="button" class="chip" data-preset="${esc(name)}">${esc(presetLabel(name))}</button>`)
@@ -182,20 +280,41 @@ function renderPresets() {
   }
 }
 
+/**
+ * One per continent, plus 全球 and 中国 — the same regions the chip sections
+ * below use, so the two rows cannot disagree about what a region is. A preset
+ * the catalogue has no nodes for simply does not render.
+ */
 const PRESET_LABELS = {
   global: "全球",
-  china: "中国大陆",
-  greater_china: "大中华",
-  apac: "亚太",
+  china: "中国",
+  asia: "亚洲",
   europe: "欧洲",
-  americas: "美洲",
+  north_america: "北美",
+  south_america: "南美",
+  africa: "非洲",
+  oceania: "大洋洲",
+  antarctica: "南极洲",
 };
 const presetLabel = (name) => PRESET_LABELS[name] || name;
 
-function applyPreset(name) {
+async function applyPreset(name) {
   const ids = state.presets[name];
   if (!ids) return;
-  const usable = ids.filter((id) => state.nodes.some((n) => n.id === id && n.probes > 0));
+  // A preset may name nodes outside the short featured list — 中国 reaches for
+  // Hong Kong and Taiwan carriers that are not in it. Dropping those silently
+  // would make the button select fewer nodes than it says. Pull the full
+  // catalogue once so their labels are known too.
+  if (ids.some((id) => !state.known.has(id))) {
+    try {
+      remember((await api("/nodes?all=1")).nodes);
+    } catch {
+      /* labels degrade to the id; selection still works, ids are self-describing */
+    }
+  }
+  // Only drop what we know is empty. An unknown id is still measurable — the
+  // server resolves `cc-asn` against live Atlas, not against this catalogue.
+  const usable = ids.filter((id) => (state.known.get(id)?.probes ?? 1) > 0);
   // Presets are shared with API callers and can be larger than this caller's
   // tier allows; trim rather than let the server reject the default flow.
   state.selected = new Set(usable.slice(0, state.limits.maxNodes));
@@ -206,6 +325,7 @@ async function toggleAll() {
   state.showingAll = !state.showingAll;
   const data = await api(state.showingAll ? "/nodes?all=1" : "/nodes");
   state.nodes = data.nodes;
+  remember(data.nodes);
   $("more").textContent = state.showingAll ? "只看常用节点" : `展开全部 ${data.totalCount} 个节点`;
   renderRegions();
 }
@@ -220,8 +340,11 @@ function syncChips() {
 
 /** The collapsed picker still has to say what is selected, by name. */
 function syncChosen() {
-  // Keep catalogue order (grouped by continent) so the summary reads like a route.
-  const labels = state.nodes.filter((n) => state.selected.has(n.id)).map((n) => n.label);
+  // Keep catalogue order (grouped by continent) so the summary reads like a
+  // route, then append anything picked from search, which has no place in it.
+  const inOrder = state.nodes.filter((n) => state.selected.has(n.id)).map((n) => n.id);
+  const offCatalogue = [...state.selected].filter((id) => !inOrder.includes(id));
+  const labels = [...inOrder, ...offCatalogue].map((id) => state.known.get(id)?.label ?? id);
   const shown = labels.slice(0, 4).join("、");
   const rest = labels.length > 4 ? ` +${labels.length - 4}` : "";
   $("chosen").innerHTML = labels.length
