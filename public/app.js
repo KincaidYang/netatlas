@@ -1201,12 +1201,28 @@ function cell(parts) {
 
 /**
  * Parts as Markdown. Each is a code span, so a value containing the separator
- * cannot be read as two — the boundary is the backticks, not a character that
- * could occur in the data. Backticks inside are turned into apostrophes; there
- * is no escape that survives a table cell.
+ * cannot be read as two — the boundary is the fence, not a character that
+ * could occur in the data.
+ *
+ * The fence is longer than the longest backtick run inside the value, which is
+ * how CommonMark says to do it, and a value that starts or ends with a
+ * backtick gets one space of padding that the renderer eats again. An earlier
+ * version replaced backticks with apostrophes: silently rewriting a measured
+ * record, in a tool whose entire claim is that it does not.
+ *
+ * `|` is escaped because a pipe ends a table cell no matter what encloses it.
+ * That is a change to the Markdown, not to the value — it renders back as the
+ * character that was measured.
  */
 function plain(parts) {
-  return parts.map((x) => `\`${x.text.replace(/`/g, "'")}\``).join(" ");
+  return parts
+    .map((x) => {
+      const longest = Math.max(0, ...[...x.text.matchAll(/`+/g)].map((m) => m[0].length));
+      const fence = "`".repeat(longest + 1);
+      const pad = x.text.startsWith("`") || x.text.endsWith("`") ? " " : "";
+      return `${fence}${pad}${x.text.replace(/\|/g, "\\|")}${pad}${fence}`;
+    })
+    .join(" ");
 }
 
 /** The same run as a curl the reader can paste — the API is the product too. */
