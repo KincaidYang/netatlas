@@ -523,17 +523,42 @@ function sheet(group) {
   const failed = group.probes.every((p) => !p.ok);
   const partial = group.responded < group.requested;
   const asn = group.probes[0]?.asn;
+  const spread = citySpread(group.probes);
   return (
     `<article class="sheet ${failed ? "fail" : "done"}">` +
     `<header><span class="node">${esc(group.label)}</span>` +
     `${asn ? `<span class="asn">AS${esc(asn)}</span>` : ""}` +
+    `${spread ? `<span class="cities">${esc(spread)}</span>` : ""}` +
     `<span class="stamp${partial ? " err" : ""}">${group.responded}/${group.requested} 探针</span></header>` +
     `<div class="body">${group.probes.map((p) => probeBody(p, group.probes.length > 1)).join("")}</div></article>`
   );
 }
 
+/**
+ * "北京×2 广州×1" — but only when the node's probes really are in different
+ * cities. A node is one country and one operator, not one place: 中国·电信 can
+ * answer from Beijing and Guangzhou at once, and that is most of the RTT
+ * spread a reader would otherwise read as jitter. When they all sit in one
+ * city the per-probe lines already say so, and a header repeat is noise.
+ */
+function citySpread(probes) {
+  const tally = new Map();
+  for (const p of probes) if (p.city) tally.set(p.city, (tally.get(p.city) ?? 0) + 1);
+  if (tally.size < 2) return "";
+  return [...tally.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([city, n]) => `${city}×${n}`)
+    .join(" ");
+}
+
 function probeBody(p, labelled) {
-  const tag = labelled ? `<div class="pid">探针 #${esc(p.probeId)}${p.from ? ` · ${esc(p.from)}` : ""}</div>` : "";
+  // The city is worth a line even for a lone probe — "中国·电信" says nothing
+  // about whether this was measured from Beijing or Ürümqi.
+  const tag =
+    labelled || p.city
+      ? `<div class="pid">探针 #${esc(p.probeId)}` +
+        `${p.city ? ` · ${esc(p.city)}` : ""}${p.from ? ` · ${esc(p.from)}` : ""}</div>`
+      : "";
   if (p.error && !p.ok && Object.keys(p.detail || {}).length === 0) {
     return `<div class="probe">${tag}<span class="stamp err">${esc(p.error)}</span></div>`;
   }

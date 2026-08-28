@@ -51,6 +51,9 @@ export interface ProbeMeta {
   asn_v4?: number | null;
   asn_v6?: number | null;
   status?: number;
+  /** GeoJSON Point, `[longitude, latitude]`. The only location Atlas exposes —
+   * probes carry no city field, so src/geo.ts turns this into a name. */
+  geometry?: { coordinates?: [number, number] | number[] } | null;
 }
 
 /** One row of `GET /measurements/<id>/results/`. Shape varies per type. */

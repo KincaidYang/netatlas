@@ -10,7 +10,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "cf-typegen": "wrangler types",
-    "nodes:refresh": "node scripts/build-nodes.mjs > data/nodes.json"
+    "nodes:refresh": "node scripts/build-nodes.mjs > data/nodes.json",
+    "cities:refresh": "node scripts/build-cities.mjs > data/cities.json"
   },
   "dependencies": {
     "hono": "^4.6.14"
