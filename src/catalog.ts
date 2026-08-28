@@ -96,18 +96,41 @@ export class CatalogCache implements DurableObject {
   async alarm(): Promise<void> {
     let ok = true;
     try {
-      await this.refresh();
+      await this.sweep();
     } catch {
       ok = false; // the retry below is the recovery; nothing else to do here
     }
     await this.state.storage.setAlarm(Date.now() + (ok ? TTL_MS : CatalogCache.RETRY_MS));
   }
 
-  /** Start the chain the first time this object is used, and never twice. */
-  private async ensureAlarm(): Promise<void> {
-    if ((await this.state.storage.getAlarm()) === null) {
-      await this.state.storage.setAlarm(Date.now() + TTL_MS);
-    }
+  /**
+   * One sweep at a time, whoever asked for it.
+   *
+   * On a cold object the first request arms an alarm that is already due, so
+   * the alarm and the lazy trigger both want to sweep within the same second.
+   * Without this they would each run a full 30-request pass and both write the
+   * result — twice the load on Atlas to produce the same answer.
+   */
+  private sweep(): Promise<void> {
+    this.refreshing ??= this.refresh().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  /**
+   * Start the chain the first time this object is used, and never twice.
+   *
+   * Scheduled from the last sweep, not from now. An object that predates
+   * alarms — every deployed one, the first time this ships — may be holding a
+   * snapshot two hours and fifty-nine minutes old; arming for three hours from
+   * *this* request would leave it stale for nearly three more, which is the
+   * exact state alarms were added to end. Already due means due now.
+   */
+  private async ensureAlarm(refreshedAt: number | undefined): Promise<void> {
+    if ((await this.state.storage.getAlarm()) !== null) return;
+    const due = refreshedAt ? refreshedAt + TTL_MS : Date.now();
+    await this.state.storage.setAlarm(Math.max(due, Date.now()));
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -116,21 +139,19 @@ export class CatalogCache implements DurableObject {
     const query = url.searchParams.get("q")?.trim() ?? "";
     const sizeFor = url.searchParams.get("ids")?.trim() ?? "";
 
-    const [counts, names, refreshedAt] = await Promise.all([
+    const [counts, names, refreshedAt, swept] = await Promise.all([
       this.loadSharded<Counts[string]>("groups", "counts"),
       this.loadSharded<string>("names", "names"),
       this.state.storage.get<number>("refreshedAt"),
+      this.state.storage.get<{ probes: number; countries: number }>("sweptTotals"),
     ]);
 
-    this.state.waitUntil(this.ensureAlarm());
+    this.state.waitUntil(this.ensureAlarm(refreshedAt));
 
     const stale = !refreshedAt || Date.now() - refreshedAt > TTL_MS;
-    if ((stale || force) && !this.refreshing) {
+    if (stale || force) {
       // Fire and forget: the DO stays responsive and the caller is not blocked.
-      this.refreshing = this.refresh().finally(() => {
-        this.refreshing = null;
-      });
-      this.state.waitUntil(this.refreshing);
+      this.state.waitUntil(this.sweep());
     }
 
     // Live probe counts for specific node ids. `resolveNodes` plans its Atlas
@@ -172,7 +193,7 @@ export class CatalogCache implements DurableObject {
           source: "live",
           count: 0,
           nodes: merge(counts, names ?? {}),
-          totals: totalsOf(counts),
+          totals: totalsOf(counts, swept),
         }
       : {
           refreshedAt: null,
@@ -199,8 +220,20 @@ export class CatalogCache implements DurableObject {
       for (const b of batch) rest.push(...b.results);
     }
 
+    // Counted before the IPv4 filter below, because the headline on the console
+    // says "RIPE Atlas 在线探针" and that has to mean every connected probe.
+    // The groups deliberately drop the 188 IPv6-only ones — they cannot be
+    // addressed by a `cc-<v4 ASN>` node id — so summing group counts would
+    // quietly understate Atlas by exactly those probes.
+    const all = [...first.results, ...rest];
+    // `?` is Atlas's placeholder for a probe it could not place. It is not a
+    // country and must not be counted as one — the probe itself is real and
+    // still counts.
+    const placed = all.map((p) => p.country_code).filter((cc): cc is string => !!cc && cc !== "?");
+    const swept = { probes: all.filter((p) => p.country_code).length, countries: new Set(placed).size };
+
     const groups = new Map<string, { v4: number; v6: number; v6asn: Map<number, number> }>();
-    for (const probe of [...first.results, ...rest]) {
+    for (const probe of all) {
       const cc = probe.country_code?.toLowerCase();
       // A node id is `cc-<v4 ASN>`, so a probe without one cannot be addressed
       // by any node — 188 of Atlas's connected probes are IPv6-only. Keying
@@ -258,7 +291,7 @@ export class CatalogCache implements DurableObject {
       // Losing them must never cost us a refresh, because a refresh that never
       // lands means every page load sweeps Atlas again.
     }
-    await this.state.storage.put("refreshedAt", Date.now());
+    await this.state.storage.put({ sweptTotals: swept, refreshedAt: Date.now() });
     // The pre-sharding `counts` and `names` values are deliberately left in
     // place. They cost a little dead storage and buy a safe rollback: an older
     // Worker reads them and gets a working, if thinner, catalogue instead of
@@ -350,15 +383,29 @@ function cleanHolder(raw: string): string {
 
 const seedById = new Map(SEED_NODES.map((n) => [n.id, n]));
 
-/** Everything the last sweep saw, before any policy trims it down. */
-function totalsOf(counts: Counts): { probes: number; groups: number; countries: number } {
+/**
+ * Everything the last sweep saw, before any policy trims it down.
+ *
+ * `probes` and `countries` come from the sweep itself rather than from the
+ * groups: the groups hold only IPv4-addressable probes, so summing them would
+ * report Atlas as 188 probes smaller than it is. `groups` is a count of
+ * `cc-<v4 ASN>` pairs and is right to exclude them — they are not selectable.
+ * A pre-alarm object has no stored sweep totals; deriving them from the groups
+ * is then the best available answer until the next sweep replaces it.
+ */
+function totalsOf(
+  counts: Counts,
+  swept: { probes: number; countries: number } | undefined,
+): { probes: number; groups: number; countries: number } {
+  const groups = Object.keys(counts).length;
+  if (swept) return { probes: swept.probes, groups, countries: swept.countries };
   const countries = new Set<string>();
   let probes = 0;
   for (const [id, group] of Object.entries(counts)) {
     probes += group[0];
     countries.add(id.split("-")[0]);
   }
-  return { probes, groups: Object.keys(counts).length, countries: countries.size };
+  return { probes, groups, countries: countries.size };
 }
 
 /** One stored group as a displayable node. Shared by the catalogue and search. */
