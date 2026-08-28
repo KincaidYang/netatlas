@@ -885,10 +885,18 @@ function recordsOf(type, group) {
   return fp ? [`SHA-256 ${fp.slice(0, 16)}…`] : [];
 }
 
+/**
+ * A bucket key, and only a key — never taken apart again, and never ambiguous.
+ *
+ * `distinctAnswers.join(", ")` had the same flaw `sharedAnswer` did: a record
+ * whose data contains the delimiter collides with a different set of records
+ * that happens to serialise the same way, and two nodes that disagree get
+ * bucketed as agreeing. Codex found it in `sharedAnswer`; it was here too.
+ */
 function signature(type, group) {
   if (type === "dns") {
     const answers = group.summary?.distinctAnswers ?? [];
-    return answers.length ? answers.join(", ") : null;
+    return answers.length ? JSON.stringify([...answers].sort()) : null;
   }
   const fp = group.summary?.fingerprint;
   return fp ? `SHA-256 ${fp.slice(0, 16)}…` : null;
@@ -1033,22 +1041,29 @@ function sharedAnswer(group) {
   // so it differs everywhere by design — `summarize` in src/measurements/dnsKind.ts
   // says so and refuses to let it decide who agrees. Including it here split
   // 香港·香港宽频 over 77 vs 120 seconds on identical addresses.
-  const key = (a) => a.map((r) => `${r.type} ${r.data}`).sort().join("|");
-  const first = key(answers[0]);
-  if (!answers.every((a) => key(a) === first)) return null;
+  // Compared structurally. Joining with a delimiter — any delimiter — is
+  // ambiguous against record data that contains it: one TXT whose value is
+  // `bar|TXT foo` serialises identically to two TXT records `bar` and `foo`,
+  // and this function would then call two different answers the same and print
+  // only the first. The same mistake as reparsing on ", ", one level up.
+  const norm = (a) =>
+    a.map((r) => [r.type, r.data]).sort((x, y) => x[0].localeCompare(y[0]) || x[1].localeCompare(y[1]));
+  const first = norm(answers[0]);
+  const same = (a) => a.length === first.length && a.every((r, i) => r[0] === first[i][0] && r[1] === first[i][1]);
+  if (!answers.every((a) => same(norm(a)))) return null;
 
   // Which does mean the TTLs on show are a range, not a number.
   const ttls = new Map();
   for (const a of answers) {
     for (const r of a) {
-      const k = `${r.type} ${r.data}`;
+      const k = JSON.stringify([r.type, r.data]);
       const seen = ttls.get(k) ?? [];
       ttls.set(k, [...seen, r.ttl]);
     }
   }
   return answers[0]
     .map((a) => {
-      const k = `${a.type} ${a.data}`;
+      const k = JSON.stringify([a.type, a.data]);
       const vs = (ttls.get(k) ?? []).filter((v) => v != null);
       const lo = Math.min(...vs);
       const hi = Math.max(...vs);
