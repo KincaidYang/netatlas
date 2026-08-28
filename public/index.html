@@ -145,12 +145,14 @@ main{margin-top:2.5rem}
 .bar.pending .who,.bar.pending .val{color:var(--contour)}
 
 /* answer-divergence view for dns / sslcert */
-.verdict{font-family:var(--cond);text-transform:uppercase;letter-spacing:.08em;font-size:.8125rem;margin:0 0 1rem}
+.verdict{font-family:var(--cond);text-transform:uppercase;letter-spacing:.08em;font-size:.8125rem;margin:0 0 .6rem}
 .verdict.split{color:var(--accent)}
-.answer{border-left:4px solid var(--contour);padding:.6rem 0 .6rem .85rem;margin-bottom:.9rem}
+/* Tight on purpose: this sits above the results, and at 50 selectable nodes a
+   roomy summary pushes the thing people came for off the screen. */
+.answer{border-left:4px solid var(--contour);padding:.3rem 0 .3rem .7rem;margin-bottom:.45rem}
 .answer.alt{border-left-color:var(--accent)}
-.answer .val{font-weight:600;overflow-wrap:anywhere}
-.answer .who{color:var(--ink-soft);font-size:.8125rem;margin-top:.3rem}
+.answer .val{font-weight:600;overflow-wrap:anywhere;font-size:.8125rem}
+.answer .who{color:var(--ink-soft);font-size:.75rem;margin-top:.1rem;overflow-wrap:anywhere}
 
 .sheet{background:var(--panel);border:var(--frame);border-left-width:4px;padding:.7rem .9rem;margin-bottom:.55rem;animation:land .25s ease-out}
 @keyframes land{from{opacity:0;transform:translateY(4px)}}

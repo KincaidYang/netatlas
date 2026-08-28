@@ -727,16 +727,54 @@ function answerView(report) {
   }
   if (buckets.size === 0) return "";
 
-  const sorted = [...buckets.entries()].sort((a, b) => b[1].who.length - a[1].who.length);
-  // Several DNS answers across regions is ordinary GeoDNS, so this states the
-  // fact and leaves it there. Several *certificates* is worth a second look.
-  const split = sorted.length > 1;
+  const split = buckets.size > 1;
+  // Smallest group first when the answers disagree. The finding is who is the
+  // odd one out, not who is normal — naming the eight nodes that agree buries
+  // the one that does not, and at 50 selectable nodes it buries it under a
+  // paragraph. DNS keeps largest-first: several answers across regions is
+  // ordinary GeoDNS, where no group is the exception.
+  const sorted = [...buckets.entries()].sort((a, b) =>
+    report.type === "dns" || !split
+      ? b[1].who.length - a[1].who.length
+      : a[1].who.length - b[1].who.length,
+  );
   const verdict =
     report.type === "dns"
       ? `<p class="verdict">${split ? `各地返回 ${sorted.length} 组结果` : "各地结果一致"}</p>`
       : split
         ? `<p class="verdict split">各地证书不一致 · ${sorted.length} 种</p>`
         : `<p class="verdict">各地证书一致</p>`;
+
+  // Naming every node stops being information somewhere around four, and
+  // truncating the list is the wrong lever — the labels are "国家 · 运营商",
+  // so a roll-call repeats the country once per operator. Past four, collapse
+  // to countries: "香港×3、台湾×3" is a fifth of the width of naming six
+  // carriers and answers the question people are actually scanning for, which
+  // is which places saw this. The full list stays on the element's title.
+  const NAMED = 4;
+  const who = (names) => {
+    if (names.length <= NAMED) return names.join("、");
+    const byCountry = new Map();
+    for (const n of names) {
+      const country = n.split(" · ")[0];
+      byCountry.set(country, (byCountry.get(country) ?? 0) + 1);
+    }
+    return [...byCountry.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([country, n]) => (n > 1 ? `${country}×${n}` : country))
+      .join("、");
+  };
+
+  // "A 104.26.14.87, A 104.26.15.87" says A twice for a query that was A, and
+  // the record type is already in the header. Dropped only when every record
+  // in the group shares one type — an ANY query genuinely needs it on each.
+  const display = (answer) => {
+    const parts = answer.split(", ");
+    const types = new Set(parts.map((r) => r.slice(0, r.indexOf(" "))));
+    return types.size === 1 && report.type === "dns"
+      ? parts.map((r) => r.slice(r.indexOf(" ") + 1)).join(", ")
+      : answer;
+  };
 
   return (
     verdict +
@@ -746,9 +784,14 @@ function answerView(report) {
           b.ttlMin === null
             ? ""
             : ` · TTL ${b.ttlMin}${b.ttlMax !== b.ttlMin ? `–${b.ttlMax}` : ""}`;
+        // The majority in a split needs no roll-call: it is everyone else.
+        const label =
+          split && i === sorted.length - 1 && b.who.length > NAMED
+            ? `其余 ${b.who.length} 个节点`
+            : `${b.who.length} 个节点 · ${who(b.who)}`;
         return (
-          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${esc(answer)}</div>` +
-          `<div class="who">${b.who.length} 个节点 · ${esc(b.who.join("、"))}${esc(ttl)}</div></div>`
+          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${esc(display(answer))}</div>` +
+          `<div class="who" title="${esc(b.who.join("、"))}">${esc(label)}${esc(ttl)}</div></div>`
         );
       })
       .join("")
