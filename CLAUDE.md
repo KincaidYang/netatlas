@@ -336,12 +336,19 @@ thrown as `QuotaError` (which carries its own `Response`), because Hono's
   `latencyView`'s own comment said comparing is the entire job. The API keeps
   its stable order: that order is part of what a shared `/m/<id>` returns.
 - **An outlier may reorder and highlight, never hide.** A node far from its
-  peers moves up and its number turns red. Folding "unremarkable" cards was
+  peers moves up and its number turns red — far meaning **3x the baseline and
+  100 ms above it**, both conditions, per probe as well as per group. The ratio
+  alone reddens a probe 30 ms from its peers; the gap alone reddens every slow
+  but consistent node. `test/console.test.ts` holds these numbers against the
+  code, along with the others stated here — an hour of clock staleness and
+  fourteen days of certificate — because three times on this branch a comment
+  of mine described behaviour the code did not have. Folding "unremarkable" cards was
   tried and removed: the rule for what counts as unremarkable was invented
   here, and a bad sort costs an awkward order while a bad fold costs the thing
   the reader came to find. Length is solved by the table view instead, where
   the reader picks the density — cards up to twelve nodes, table beyond, and an
-  explicit choice sticks.
+  explicit choice sticks. That threshold decides which view opens, never what
+  exists in it.
 - **Fold the answer, never the probe.** When every probe in a node returns the
   same records, print them once — six nodes were repeating the same three
   Cloudflare addresses thirty-six times. Each probe keeps its own line with its
