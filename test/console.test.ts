@@ -33,18 +33,44 @@ function outcomeBody(): string {
   return m[1];
 }
 
-/** Field names the console reads inside one type's branch of `outcome()`. */
+const FIELD = /\bd\.([a-zA-Z][a-zA-Z0-9]*)/g;
+
+/**
+ * Field names the console reads for one type.
+ *
+ * A type with no branch of its own — dns — falls through to the shared tail,
+ * so that tail is what covers it. Returning an empty list for those was a hole
+ * in the suite written to prevent holes: the loop skipped its assertions, and
+ * renaming `answers` in `dnsKind.parseRow` would have left everything green.
+ */
 function fieldsFor(type: string): string[] {
   const body = outcomeBody();
   const start = body.indexOf(`if (type === "${type}")`);
-  if (start === -1) return [];
+  if (start === -1) return fallbackFields();
   // Up to the next branch, or — for the last one — up to the shared fallback
   // that handles types without a branch of their own. Without that second
   // stop, `ping` swept in the fallback's fields and demanded `d.answers` of it.
   const rest = body.slice(start + 1);
   const ends = [rest.indexOf('if (type === "'), rest.indexOf("if (Array.isArray(")].filter((i) => i !== -1);
   const branch = ends.length ? rest.slice(0, Math.min(...ends)) : rest;
-  return [...new Set([...branch.matchAll(/\bd\.([a-zA-Z][a-zA-Z0-9]*)/g)].map((m) => m[1]))];
+  return [...new Set([...branch.matchAll(FIELD)].map((m) => m[1]))];
+}
+
+/**
+ * The shared answer path at the end of `outcome()` — the branch a type without
+ * one of its own lands in.
+ *
+ * Only that branch. The line after it, `return d.dstAddr ? …`, is the
+ * last-resort for a type with neither a branch nor answers; dns never reaches
+ * it, and demanding `dstAddr` of `dnsKind.parseRow` would be the test
+ * modelling the code wrong rather than the code being wrong.
+ */
+function fallbackFields(): string[] {
+  const body = outcomeBody();
+  const at = body.indexOf("if (Array.isArray(");
+  if (at === -1) throw new Error("shared fallback not found in outcome() — did it change shape?");
+  const line = body.slice(at, body.indexOf("\n", at));
+  return [...new Set([...line.matchAll(FIELD)].map((m) => m[1]))];
 }
 
 const row = (o: Record<string, unknown>): AtlasResultRow => ({ prb_id: 1, ...o });
@@ -84,9 +110,7 @@ describe("console ↔ parseRow field contract", () => {
   for (const [type, kind] of Object.entries(KINDS)) {
     it(`${type}: every field the console reads is produced by parseRow`, async () => {
       const fields = fieldsFor(type);
-      // A type with no branch of its own falls through to the shared answer /
-      // destination path, which the dns case already covers.
-      if (fields.length === 0) return;
+      expect(fields.length, `no fields extracted for ${type}`).toBeGreaterThan(0);
       const out = await (kind as { parseRow: (r: AtlasResultRow) => Promise<{ detail: object }> }).parseRow(
         ROWS[type as keyof typeof ROWS],
       );
@@ -97,12 +121,17 @@ describe("console ↔ parseRow field contract", () => {
     });
   }
 
-  it("reads at least one field for the types whose finding is not the address", async () => {
+  it("extracts fields for every type, including the ones with no branch", async () => {
     // Guards the extraction itself: if the regex stopped matching, every list
     // above would be empty and every assertion would pass vacuously.
-    for (const type of ["ntp", "sslcert", "http", "traceroute"]) {
+    //
+    // dns belongs in this list. Leaving it out was how the suite came to skip
+    // dns entirely while claiming to cover six types — the same silent gap it
+    // exists to catch, in the guard against silent gaps.
+    for (const type of Object.keys(KINDS)) {
       expect(fieldsFor(type).length, `no fields extracted for ${type}`).toBeGreaterThan(0);
     }
+    expect(fieldsFor("dns")).toContain("answers");
   });
 });
 
