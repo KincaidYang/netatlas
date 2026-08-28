@@ -354,3 +354,56 @@ describe("paginated probe lookup", () => {
     expect(pages).toEqual([1]);
   });
 });
+
+describe("retry after a partial page failure", () => {
+  /** Succeeds on page one, throws on page two, succeeds when asked alone. */
+  const flakyClient = (probes: ProbeMeta[]) => {
+    let batchCalls = 0;
+    const client = {
+      findProbes: async (q: { asns?: number[]; page?: number }) => {
+        const page = q.page ?? 1;
+        const multi = (q.asns?.length ?? 0) > 1;
+        if (multi) {
+          batchCalls++;
+          if (page > 1) throw new Error("atlas 500");
+        }
+        const matching = probes.filter((p) => q.asns?.includes(p.asn_v4 ?? 0));
+        return matching.slice((page - 1) * 500, page * 500);
+      },
+    } as unknown as AtlasClient;
+    return { client, calls: () => batchCalls };
+  };
+
+  const many = (asn: number, n: number, from: number): ProbeMeta[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: from + i,
+      country_code: "DE",
+      asn_v4: asn,
+      asn_v6: asn,
+      status: 1,
+    }));
+
+  it("does not count the probes it already collected twice", async () => {
+    const { client } = flakyClient([...many(3320, 600, 1), ...many(3209, 40, 5000)]);
+    const out = await resolveNodes(client, ["de-3320", "de-3209"], 3, 4, 50);
+    // Page one of the failed batch already delivered these; the per-node retry
+    // starts again from page one and delivers them a second time.
+    expect(out.available["de-3320"]).toBe(600);
+    expect(out.available["de-3209"]).toBe(40);
+  });
+
+  it("never hands Atlas the same probe twice in one group", async () => {
+    // The lone probe has to sort *inside* the first page, or the retry is its
+    // first sighting and nothing is duplicated. With one probe and a request
+    // for three, a repeated entry is then certain rather than a lucky shuffle.
+    const { client } = flakyClient([...many(3209, 1, 5000), ...many(3320, 600, 1)]);
+    const out = await resolveNodes(client, ["de-3320", "de-3209"], 3, 4, 50);
+    const lone = out.probes.find((g) => String(g.value).includes("5000"));
+    expect(lone?.value).toBe("5000");
+    expect(out.requested["de-3209"]).toBe(1);
+    for (const group of out.probes) {
+      const ids = String(group.value).split(",");
+      expect(new Set(ids).size).toBe(ids.length);
+    }
+  });
+});

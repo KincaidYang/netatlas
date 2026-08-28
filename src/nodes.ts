@@ -374,9 +374,13 @@ export async function resolveNodes(
   // Narrow each unknown-v6 node to a single IPv6 ASN, so a selection cannot
   // mix an operator's native v6 with a tunnel broker's.
   for (const [id, candidates] of v6Candidates) {
-    const asn = dominantV6(candidates);
+    // A page that failed mid-batch is retried from page one, so the same probe
+    // can arrive twice. Left in, it skews the vote below and then lands in the
+    // pool twice over.
+    const unique = [...new Map(candidates.map((p) => [p.id, p])).values()];
+    const asn = dominantV6(unique);
     if (asn === null) continue;
-    pools.get(id)!.push(...candidates.filter((p) => p.asn_v6 === asn).map((p) => p.id));
+    pools.get(id)!.push(...unique.filter((p) => p.asn_v6 === asn).map((p) => p.id));
   }
 
   const probes: ProbeSelectionGroup[] = [];
@@ -384,7 +388,11 @@ export async function resolveNodes(
   const unavailable: string[] = [];
   const available: Record<string, number> = {};
   for (const node of nodes) {
-    const pool = pools.get(node.id) ?? [];
+    // Deduplicated for the same reason: a batch that failed on a later page is
+    // retried node by node from page one, and the probes already collected are
+    // still in here. Counting them twice inflates `available`, and shuffling a
+    // list with repeats can hand Atlas the same probe id twice in one group.
+    const pool = [...new Set(pools.get(node.id) ?? [])];
     available[node.id] = pool.length;
     const chosen = shuffle(pool).slice(0, per);
     if (chosen.length === 0) {

@@ -128,6 +128,11 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   search had reported their probes. Pagination is still there as a rail (four
   pages), but with real sizes it rarely fires. If the DO is unreachable the
   guess returns and the rail catches it.
+- **A batch that fails mid-pagination is retried from page one**, so probes
+  already collected arrive a second time. Pools are deduplicated before they
+  are counted or sampled — otherwise `available` inflates (600 reported as
+  1,100) and `shuffle().slice()` can hand Atlas the same probe id twice inside
+  one group.
 
 ## Where the city name comes from
 
