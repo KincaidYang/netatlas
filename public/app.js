@@ -496,6 +496,11 @@ function refreshQuota() {
       if (state.selected.size > q.maxNodes) {
         state.selected = new Set([...state.selected].slice(0, q.maxNodes));
       }
+      // The ceiling belongs to the tier, so it is read from /quota rather than
+      // written into the copy. A number in two places is a number that will
+      // disagree with itself — and until it arrives the sentence simply reads
+      // without one, the same rule the scale line follows.
+      $("ledecap").textContent = `（一次最多 ${q.maxNodes} 个）`;
       const daily = q.creditsLimit ? ` · 今日已用 ${q.creditsUsedToday}/${q.creditsLimit}` : "";
       $("quota").innerHTML =
         q.tier === "byok"
