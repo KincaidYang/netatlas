@@ -127,6 +127,12 @@ main{margin-top:2.5rem}
 .grid .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .grid .n.slow{color:var(--err)}
 .grid .a{font-size:.75rem}
+/* One element per record, so where one ends and the next begins is structure
+   rather than a character that could occur inside the data. */
+.grid .rec{display:inline-block}
+.grid .rec+.rec::before{content:"·";color:var(--contour);margin:0 .35rem}
+.grid .rec.slow{color:var(--err)}
+.grid .rec.strong{font-weight:600}
 .grid .e{color:var(--err);font-size:.75rem}
 .grid tr.down td{color:var(--err)}
 /* The API is the product too; show the one-liner that reproduces this run. */

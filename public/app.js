@@ -1109,7 +1109,7 @@ function tableView(groups, type) {
               `<td>${i === 0 ? esc(g.label) : ""}</td>` +
               `<td class="c">${esc(p.city ?? "")}</td>` +
               `<td class="n${odd.has(p.probeId) ? " slow" : ""}">${t == null ? "—" : esc(ms(t))}</td>` +
-              `<td class="a">${outcome(type, p)}</td>` +
+              `<td class="a">${cell(outcome(type, p))}</td>` +
               `<td class="e">${p.ok ? "" : esc(p.error ?? "失败")}</td></tr>`
             );
           });
@@ -1132,6 +1132,7 @@ function tableView(groups, type) {
  */
 function outcome(type, p) {
   const d = p.detail || {};
+  const part = (text, cls) => ({ text: String(text), cls });
   // Deliberately not short-circuiting on `!p.ok`. A traceroute that never
   // arrives is marked failed and still carries the hop count, the timeouts and
   // how far it got — which is the entire diagnostic value of a failed
@@ -1140,51 +1141,72 @@ function outcome(type, p) {
   // was seen.
   if (type === "ntp") {
     const bits = [];
-    if (d.offsetMs != null) bits.push(`<b>偏移 ${esc(ms(d.offsetMs))}</b>`);
-    if (d.stratum != null) bits.push(`层级 ${esc(d.stratum)}`);
+    if (d.offsetMs != null) bits.push(part(`偏移 ${ms(d.offsetMs)}`, "strong"));
+    if (d.stratum != null) bits.push(part(`层级 ${d.stratum}`));
     // A free-running server still advertises a healthy stratum; this is how a
     // reader catches that without opening the card.
-    if (d.refAgeSec != null && d.refAgeSec > 3600) bits.push(`<span class="slow">上游 ${esc(age(d.refAgeSec))}前</span>`);
+    if (d.refAgeSec != null && d.refAgeSec > 3600) bits.push(part(`上游 ${age(d.refAgeSec)}前`, "slow"));
     if (d.probeClockAgeSec != null && d.probeClockAgeSec > 3600)
-      bits.push(`<span class="slow">探针时钟 ${esc(age(d.probeClockAgeSec))}前</span>`);
-    return bits.join(" · ");
+      bits.push(part(`探针时钟 ${age(d.probeClockAgeSec)}前`, "slow"));
+    return bits;
   }
   if (type === "sslcert") {
     const bits = [];
-    if (d.subjectCN) bits.push(esc(d.subjectCN));
+    if (d.subjectCN) bits.push(part(d.subjectCN));
     if (d.daysLeft != null)
       bits.push(
         d.daysLeft < 0
-          ? `<span class="slow">已过期 ${esc(Math.abs(d.daysLeft))} 天</span>`
-          : `<span class="${d.daysLeft < 14 ? "slow" : ""}">剩 ${esc(d.daysLeft)} 天</span>`,
+          ? part(`已过期 ${Math.abs(d.daysLeft)} 天`, "slow")
+          : part(`剩 ${d.daysLeft} 天`, d.daysLeft < 14 ? "slow" : undefined),
       );
-    if (d.issuerO || d.issuerCN) bits.push(esc(d.issuerO ?? d.issuerCN));
-    return bits.join(" · ");
+    if (d.issuerO || d.issuerCN) bits.push(part(d.issuerO ?? d.issuerCN));
+    return bits;
   }
   if (type === "http") {
     const bits = [];
-    if (d.status != null) bits.push(`<b class="${d.status >= 400 ? "slow" : ""}">${esc(d.status)}</b>`);
-    if (d.httpVersion) bits.push(esc(d.httpVersion));
-    if (d.dstAddr) bits.push(esc(d.dstAddr));
-    return bits.join(" · ");
+    if (d.status != null) bits.push(part(d.status, d.status >= 400 ? "slow" : "strong"));
+    if (d.httpVersion) bits.push(part(d.httpVersion));
+    if (d.dstAddr) bits.push(part(d.dstAddr));
+    return bits;
   }
   if (type === "traceroute") {
     const bits = [];
-    if (d.hopCount != null) bits.push(`${esc(d.hopCount)} 跳`);
-    if (d.reached === false) bits.push(`<span class="slow">未到达</span>`);
-    if (d.lossyHops > 0) bits.push(`<span class="slow">${esc(d.lossyHops)} 跳有丢包</span>`);
-    if (d.timeouts > 0) bits.push(`<span class="slow">${esc(d.timeouts)} 跳超时</span>`);
-    if (d.dstAddr) bits.push(esc(d.dstAddr));
-    return bits.join(" · ");
+    if (d.hopCount != null) bits.push(part(`${d.hopCount} 跳`));
+    if (d.reached === false) bits.push(part("未到达", "slow"));
+    if (d.lossyHops > 0) bits.push(part(`${d.lossyHops} 跳有丢包`, "slow"));
+    if (d.timeouts > 0) bits.push(part(`${d.timeouts} 跳超时`, "slow"));
+    if (d.dstAddr) bits.push(part(d.dstAddr));
+    return bits;
   }
   if (type === "ping") {
     const bits = [];
-    if (d.lossPct > 0) bits.push(`<span class="slow">丢包 ${esc(d.lossPct)}%</span>`);
-    if (d.dstAddr) bits.push(esc(d.dstAddr));
-    return bits.join(" · ");
+    if (d.lossPct > 0) bits.push(part(`丢包 ${d.lossPct}%`, "slow"));
+    if (d.dstAddr) bits.push(part(d.dstAddr));
+    return bits;
   }
-  if (Array.isArray(d.answers)) return esc(d.answers.map((a) => `${a.type} ${a.data}`).join(" "));
-  return esc(d.dstAddr ?? "");
+  // One part per record. Joining them with a space made a single TXT valued
+  // `foo A bar` identical to two records `TXT foo` and `A bar` — the same
+  // delimiter mistake as the two above it, in the last place it survived. The
+  // sinks below decide how to separate parts; this never flattens them.
+  if (Array.isArray(d.answers)) return d.answers.map((a) => part(`${a.type} ${a.data}`));
+  return d.dstAddr ? [part(d.dstAddr)] : [];
+}
+
+/** Parts as table HTML — one element each, so boundaries survive the DOM. */
+function cell(parts) {
+  return parts
+    .map((x) => `<span class="rec${x.cls ? ` ${x.cls}` : ""}">${esc(x.text)}</span>`)
+    .join("");
+}
+
+/**
+ * Parts as Markdown. Each is a code span, so a value containing the separator
+ * cannot be read as two — the boundary is the backticks, not a character that
+ * could occur in the data. Backticks inside are turned into apostrophes; there
+ * is no escape that survives a table cell.
+ */
+function plain(parts) {
+  return parts.map((x) => `\`${x.text.replace(/`/g, "'")}\``).join(" ");
 }
 
 /** The same run as a curl the reader can paste — the API is the product too. */
@@ -1214,9 +1236,9 @@ function markdown(report, id) {
       // Unconditional, like the table: a traceroute that never arrived still
       // has its hop count and an expired certificate still has its subject.
       // The error joins it rather than replacing it.
-      const seen = outcome(report.type, p).replace(/<[^>]*>/g, "");
-      const cell = [seen, p.ok ? "" : (p.error ?? "失败")].filter(Boolean).join(" · ");
-      lines.push(`| ${g.label} | ${p.city ?? ""} | ${t == null ? "—" : ms(t)} | ${cell || "—"} |`);
+      const seen = plain(outcome(report.type, p));
+      const text = [seen, p.ok ? "" : (p.error ?? "失败")].filter(Boolean).join(" · ");
+      lines.push(`| ${g.label} | ${p.city ?? ""} | ${t == null ? "—" : ms(t)} | ${text || "—"} |`);
     }
   }
   lines.push("", `${location.origin}/m/${id}`);
