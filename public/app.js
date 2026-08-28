@@ -50,8 +50,11 @@ const state = {
   /** Whether the result on screen is still being refreshed. */
   polling: false,
   limits: { ...CAUTIOUS_LIMITS },
-  /** "cards" | "table" — density is the reader's call, not a threshold I pick. */
-  view: localStorage.getItem("view") === "table" ? "table" : "cards",
+  /**
+   * "cards" | "table", or null until a run decides. Density is the reader's
+   * call; this only picks which view opens first, and both show everything.
+   */
+  view: localStorage.getItem("view") || null,
   selected: new Set(),
   showingAll: false,
   timer: null,
@@ -639,6 +642,14 @@ function render(report, id) {
         ? `<span class="resolved" title="${esc(ips.join(" · "))}">解析到 <b>${ips.length}</b> 个不同 IP</span>`
         : "";
 
+  // One order for both blocks, or the chart and the cards disagree about what
+  // comes first.
+  const groups = ordered(report);
+  // Cards read better for a handful of nodes and become a wall past a dozen,
+  // so that is where the first view flips. A weak judgement on purpose: it
+  // decides what opens, never what exists, and one click overrides it for good.
+  const view = state.view ?? (groups.length > 12 ? "table" : "cards");
+
   const head =
     `<div class="runhead">` +
     `<span class="kind">${esc(report.type)}</span>` +
@@ -648,17 +659,14 @@ function render(report, id) {
     `<span class="fill${partial && !running ? " partial" : ""}">` +
     `${report.totalResponded}/${report.totalRequested} 个探针已回${note}</span>` +
     `<span class="views">` +
-    `<button type="button" class="viewbtn" data-view="cards"${state.view === "cards" ? ' aria-pressed="true"' : ""}>卡片</button>` +
-    `<button type="button" class="viewbtn" data-view="table"${state.view === "table" ? ' aria-pressed="true"' : ""}>表格</button>` +
+    `<button type="button" class="viewbtn" data-view="cards"${view === "cards" ? ' aria-pressed="true"' : ""}>卡片</button>` +
+    `<button type="button" class="viewbtn" data-view="table"${view === "table" ? ' aria-pressed="true"' : ""}>表格</button>` +
     `</span>` +
     `<button type="button" id="md">复制 Markdown</button>` +
     `<button type="button" id="share">复制链接</button></div>`;
 
-  // One order for both blocks, or the chart and the cards disagree about what
-  // comes first.
-  const groups = ordered(report);
   const body = LATENCY_TYPES.has(report.type) ? latencyView(report, groups) : answerView(report);
-  const detail = state.view === "table" ? tableView(groups) : groups.map(sheet).join("");
+  const detail = view === "table" ? tableView(groups) : groups.map(sheet).join("");
   $("out").innerHTML = head + body + detail + cliHint(report, id);
 
   for (const btn of document.querySelectorAll("[data-view]")) {
@@ -958,17 +966,12 @@ function sheet(group) {
     `${took ? `<span class="took">${esc(took)}</span>` : ""}` +
     `<span class="stamp${partial ? " err" : ""}">${group.responded}/${group.requested} 探针</span></header>`;
 
-  // A node that answered in full, without loss, agreeing with itself and with
-  // no probe far from its peers has nothing a reader needs to act on. At fifty
-  // selectable nodes those are most of the page. Folded, not hidden — one
-  // click, the same disclosure the hop list and the address list use.
-  const plain =
-    !failed && !partial && !group.probes.some((p) => !p.ok) && !(group.summary?.lossPct > 0) && shared && odd.size === 0;
-
-  return plain
-    ? `<article class="sheet done folded"><details><summary>${header}</summary>` +
-        `<div class="body">${body}</div></details></article>`
-    : `<article class="sheet ${failed ? "fail" : "done"}">${header}<div class="body">${body}</div></article>`;
+  // No folding by "this looks unremarkable". Being an outlier may move a node
+  // up the page and colour its number — both push information at the reader —
+  // but it must never decide what they do not get to see. The rule for that
+  // would be mine, and the thresholds behind it are guesses; the table view
+  // solves the same length problem by letting them choose the density instead.
+  return `<article class="sheet ${failed ? "fail" : "done"}">${header}<div class="body">${body}</div></article>`;
 }
 
 /**

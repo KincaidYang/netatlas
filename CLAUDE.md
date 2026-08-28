@@ -265,6 +265,13 @@ Gotchas already paid for:
   rounding — three decimals first turns 0.023669 s into 24 ms, not 23.669.
 - **ping reports `-1`** for min/avg/max when nothing came back. That is "no
   measurement", not a negative RTT.
+- **A popular target can be refused outright.** Atlas caps concurrent
+  measurements *per target* across the whole platform: creating a ping to
+  `1.1.1.1` came back `400 code 102` — "We do not allow more than 25 concurrent
+  measurements to the same target: 1.1.1.1". Nothing about the account or the
+  request is wrong, and no documentation mentions it; the same request against
+  a quieter hostname succeeds. Worth recognising before debugging the selection
+  that produced it.
 - **`resolve_on_probe: true` is not the default.** Without it Atlas resolves
   the target once, centrally, and hands the same address to every probe — so a
   multi-region run measures the path to one IP from everywhere. On `qq.com`

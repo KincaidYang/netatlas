@@ -187,14 +187,6 @@ main{margin-top:2.5rem}
 .sheet .asn{color:var(--ink-soft);font-size:.75rem}
 .sheet .cities{color:var(--contour);font-size:.75rem;letter-spacing:.04em}
 .sheet .took{color:var(--ink-soft);font-size:.75rem;font-variant-numeric:tabular-nums}
-/* Folded: a node with nothing to act on. The header is the whole row, so the
-   summary must not add a line of its own. */
-.sheet.folded{padding-top:.45rem;padding-bottom:.45rem}
-.sheet.folded summary{cursor:pointer;list-style:none}
-.sheet.folded summary::-webkit-details-marker{display:none}
-.sheet.folded summary header{display:flex}
-.sheet.folded details[open] summary{margin-bottom:.4rem}
-.sheet.folded .body{margin-top:0}
 /* The answer every probe agreed on, printed once above their lines. */
 .sheet .shared{font-size:.8125rem;overflow-wrap:anywhere;margin-bottom:.35rem}
 /* .ttl was only styled inside a <dd>; the shared block is not one. */
