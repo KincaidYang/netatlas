@@ -339,9 +339,20 @@ export class CatalogCache implements DurableObject {
 
     // After the fact on purpose: a read consults `<prefix>Shards` to know how
     // many to load, so a leftover shard beyond that count is already invisible.
-    // Deleting it is hygiene, and hygiene must not be able to fail a sweep.
-    await this.prune("groups", groupShards);
-    await this.prune("names", nameShards);
+    //
+    // Swallowed on purpose too, and this is the half the comment above used to
+    // claim without the code doing it: the generation is already published, so
+    // letting a cleanup error propagate would mark the sweep failed and have
+    // the alarm run another 30-request pass ten minutes later — and again, and
+    // again, while the catalogue it is rebuilding is already fresh. A leftover
+    // shard costs some bytes nothing reads; that loop costs Atlas 180 requests
+    // an hour to change nothing.
+    try {
+      await this.prune("groups", groupShards);
+      await this.prune("names", nameShards);
+    } catch {
+      /* invisible already; the next successful sweep prunes it */
+    }
   }
 
   private async prune(prefix: string, shards: number): Promise<void> {
