@@ -54,6 +54,9 @@ export interface ProbeMeta {
   /** GeoJSON Point, `[longitude, latitude]`. The only location Atlas exposes —
    * probes carry no city field, so src/geo.ts turns this into a name. */
   geometry?: { coordinates?: [number, number] | number[] } | null;
+  /** Needed for one slug: `system-auto-geoip-country` marks a probe whose
+   * coordinates are a country centroid rather than a place. */
+  tags?: Array<{ slug?: string }> | null;
 }
 
 /** One row of `GET /measurements/<id>/results/`. Shape varies per type. */

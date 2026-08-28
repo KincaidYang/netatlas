@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cityFor, cityOf } from "../src/geo";
+import { cityFor, cityOf, cityOfProbe } from "../src/geo";
 
 /**
  * Every coordinate below was taken from a real connected probe in the Atlas
@@ -54,6 +54,15 @@ describe("cityFor", () => {
     expect(cityFor(-75.1, 123.4, "AQ")).toBeNull(); // Antarctica
   });
 
+  it("keeps the 50 km promise where a degree of longitude is short", () => {
+    // A degree of longitude is 111 km at the equator but 39 km at Tromsø, so a
+    // fixed one-bucket search silently broke the contract in the north: this
+    // probe is 44 km from Tromsø and two buckets away from it.
+    expect(cityFor(69.6489, 20.1, "NO")).toBe("Tromsø");
+    // Murmansk sits at 33.10E; 34.15E is 46 km away and, again, two buckets.
+    expect(cityFor(68.9585, 34.15, "RU")).toBe("Murmansk");
+  });
+
   it("refuses to name a country-centroid coordinate", () => {
     // Atlas tags ~500 probes `system-auto-geoip-country`; their coordinates are
     // the middle of the country, not a place. Naming them would invent a fact.
@@ -85,5 +94,71 @@ describe("cityOf", () => {
     expect(cityOf(null, "CN")).toBeNull();
     expect(cityOf({}, "CN")).toBeNull();
     expect(cityOf({ coordinates: [116.3875] }, "CN")).toBeNull();
+  });
+});
+
+describe("cityOfProbe", () => {
+  const centroid = { coordinates: [5.2913, 52.1326] as [number, number] };
+
+  it("says nothing for a probe Atlas could only place to a country", () => {
+    // The middle of the Netherlands is 12 km from Amersfoort, so the centroid
+    // does resolve — which is exactly why the tag has to be honoured. Reading
+    // coordinates alone would put a fabricated city on ~490 probes.
+    expect(
+      cityOfProbe({
+        id: 1,
+        country_code: "NL",
+        geometry: centroid,
+        tags: [{ slug: "system-ipv4-works" }, { slug: "system-auto-geoip-country" }],
+      }),
+    ).toBeNull();
+  });
+
+  it("names the same coordinates when the probe is not a centroid", () => {
+    expect(
+      cityOfProbe({
+        id: 2,
+        country_code: "NL",
+        geometry: centroid,
+        tags: [{ slug: "system-auto-geoip-city" }],
+      }),
+    ).toBe("Amersfoort");
+    // Tags absent entirely — a host-placed probe, which is the common case.
+    expect(cityOfProbe({ id: 3, country_code: "NL", geometry: centroid })).toBe("Amersfoort");
+  });
+
+  it("still names a territory that is one metro anyway", () => {
+    // 12 of Hong Kong's 61 connected probes carry the country tag, and the
+    // fallback point for Hong Kong is central Hong Kong. The whole territory
+    // fits inside the match radius, so the tag costs no precision here.
+    expect(
+      cityOfProbe({
+        id: 5,
+        country_code: "HK",
+        geometry: { coordinates: [114.1675, 22.2575] },
+        tags: [{ slug: "system-auto-geoip-country" }],
+      }),
+    ).toBe("香港");
+  });
+
+  it("does not invent the Zhengzhou cluster", () => {
+    // All 16 of China's country-tagged probes sit on this one point — what
+    // GeoIP returns for "somewhere in China", which lands beside Zhengzhou.
+    // Reading the coordinates would report a cluster that does not exist.
+    expect(cityFor(34.7705, 113.7205, "CN")).toBe("郑州");
+    expect(
+      cityOfProbe({
+        id: 6,
+        country_code: "CN",
+        geometry: { coordinates: [113.7205, 34.7705] },
+        tags: [{ slug: "system-auto-geoip-country" }],
+      }),
+    ).toBeNull();
+  });
+
+  it("tolerates missing metadata", () => {
+    expect(cityOfProbe(undefined)).toBeNull();
+    expect(cityOfProbe(null)).toBeNull();
+    expect(cityOfProbe({ id: 4 })).toBeNull();
   });
 });

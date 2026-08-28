@@ -1,4 +1,4 @@
-import { cityOf } from "./geo";
+import { cityOfProbe } from "./geo";
 import type { MeasurementKind, NodeSummary, ProbeOutcome } from "./measurements";
 import type { AtlasResultRow, ProbeMeta } from "./types";
 
@@ -60,8 +60,8 @@ export async function aggregate(
       country: meta?.country_code ?? null,
       // A node is one country and one operator, but its probes can be 2000 km
       // apart — which is most of the spread a reader would otherwise blame on
-      // the network.
-      city: cityOf(meta?.geometry, meta?.country_code),
+      // the network. Probes Atlas could only place to a country come back null.
+      city: cityOfProbe(meta),
       from: typeof row.from === "string" ? row.from : null,
     });
   }

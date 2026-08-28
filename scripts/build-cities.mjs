@@ -268,12 +268,22 @@ function km(aLat, aLon, bLat, bLon) {
   return 2 * 6371 * Math.asin(Math.sqrt(x));
 }
 
-/** Same rule as src/geo.ts, kept here so the coverage report tells the truth. */
+/**
+ * Same rule as src/geo.ts, kept here so the coverage report tells the truth —
+ * including the longitude reach, which has to widen towards the poles: a
+ * degree of longitude is 111 km at the equator and 39 km at Tromsø.
+ */
+const KM_PER_DEGREE = 111.32;
+const lonReach = (lat) =>
+  Math.min(180, Math.ceil(MATCH_KM / (KM_PER_DEGREE * Math.cos(Math.min(89.9, Math.abs(lat) + 0.5) * (Math.PI / 180)))));
+
 function lookup(index, lat, lon, cc) {
   let best = null;
+  const reach = lonReach(lat);
   for (let dLat = -1; dLat <= 1; dLat++) {
-    for (let dLon = -1; dLon <= 1; dLon++) {
-      for (const row of index.get(`${Math.floor(lat) + dLat},${Math.floor(lon) + dLon}`) ?? []) {
+    for (let dLon = -reach; dLon <= reach; dLon++) {
+      const lonBucket = ((((Math.floor(lon) + dLon + 180) % 360) + 360) % 360) - 180;
+      for (const row of index.get(`${Math.floor(lat) + dLat},${lonBucket}`) ?? []) {
         const d = km(lat, lon, row[0], row[1]);
         if (d > MATCH_KM) continue;
         if (!best || d < best.d - 0.001 || (Math.abs(d - best.d) <= 0.001 && row[2] === cc)) {

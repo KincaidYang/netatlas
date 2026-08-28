@@ -111,7 +111,7 @@ export class AtlasClient {
   async getProbes(ids: number[]): Promise<Map<number, ProbeMeta>> {
     const map = new Map<number, ProbeMeta>();
     if (ids.length === 0) return map;
-    const url = `/probes/?id__in=${ids.join(",")}&fields=id,country_code,asn_v4,asn_v6,status,geometry&page_size=${ids.length}`;
+    const url = `/probes/?id__in=${ids.join(",")}&fields=id,country_code,asn_v4,asn_v6,status,geometry,tags&page_size=${ids.length}`;
     const data = await this.get<{ results?: ProbeMeta[] }>(url, {});
     for (const p of data.results ?? []) map.set(p.id, p);
     return map;
@@ -121,7 +121,7 @@ export class AtlasClient {
   async findProbes(q: ProbeQuery): Promise<ProbeMeta[]> {
     const params = new URLSearchParams({
       status: "1", // Connected
-      fields: "id,country_code,asn_v4,asn_v6,status,geometry",
+      fields: "id,country_code,asn_v4,asn_v6,status",
       page_size: String(q.limit ?? 500),
     });
     if (q.asns?.length) params.set(q.af === 6 ? "asn_v6__in" : "asn_v4__in", q.asns.join(","));

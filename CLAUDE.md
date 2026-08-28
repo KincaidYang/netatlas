@@ -103,9 +103,19 @@ So `data/cities.json` is ours, baked by `npm run cities:refresh`:
   country/region label always comes from `CN_NAMES` in `scripts/build-nodes.mjs`.
   Do not "simplify" that into using the data source's own country.
 - `cityFor()` in `src/geo.ts` answers with the nearest entry **within 50 km**
-  and null beyond it. Silence is the correct answer for a rural probe — and for
-  the ~490 probes tagged **`system-auto-geoip-country`, whose coordinates are a
-  country centroid**. Naming those would be inventing a fact.
+  and null beyond it. The longitude search widens towards the poles, because a
+  degree of longitude is 111 km at the equator and 39 km at Tromsø — a fixed
+  one-bucket reach silently breaks the 50 km promise in the north.
+- **Use `cityOfProbe()`, not `cityOf()`, on anything derived from a real
+  probe.** It is the one that honours `system-auto-geoip-country`, Atlas's own
+  admission that it placed the probe no better than its country. That tag is not
+  a formality: **all 16 of China's country-tagged probes sit on `113.72, 34.77`,
+  the point GeoIP returns for "somewhere in China", which lands beside
+  Zhengzhou.** Read their coordinates and you report a 16-probe cluster in 郑州
+  that does not exist — this catalogue's second largest, and entirely fictional.
+  The exception is `SINGLE_METRO` (HK/MO/SG): a territory smaller than the match
+  radius is one metro, so the fallback point is still the right answer, and 12
+  of Hong Kong's 61 probes need it.
 - Two build-time rules were paid for with real data, don't undo them:
   `MIN_POP` is **30,000**, because at 150k the table missed Ashburn (43k) —
   the densest probe cluster in the US, 80 of them, called 阿灵顿 38 km away;

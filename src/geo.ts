@@ -1,4 +1,5 @@
 import table from "../data/cities.json";
+import type { ProbeMeta } from "./types";
 
 /**
  * Probe coordinates → a city name.
@@ -31,6 +32,9 @@ const MATCH_KM = table.matchKm as number;
 
 const R = Math.PI / 180;
 
+/** Length of one degree of longitude at the equator. */
+const KM_PER_DEGREE = 111.32;
+
 function distanceKm(aLat: number, aLon: number, bLat: number, bLon: number): number {
   const x =
     Math.sin(((bLat - aLat) * R) / 2) ** 2 +
@@ -38,7 +42,27 @@ function distanceKm(aLat: number, aLon: number, bLat: number, bLon: number): num
   return 2 * 6371 * Math.asin(Math.sqrt(x));
 }
 
-const cellKey = (lat: number, lon: number): number => Math.floor(lat) * 1000 + Math.floor(lon);
+/**
+ * One bucket per whole degree. Longitude wraps so a search that runs off the
+ * antimeridian comes back on the other side instead of falling off the index;
+ * latitude does not, because there is nothing past the pole to reach.
+ */
+const cellKey = (latBucket: number, lonBucket: number): number =>
+  latBucket * 1000 + (((lonBucket + 180) % 360) + 360) % 360 - 180;
+
+/**
+ * How many longitude buckets 50 km spans here.
+ *
+ * A degree of longitude is 111 km at the equator and 39 km at Tromsø, so a
+ * fixed one-bucket reach quietly breaks the 50 km contract in the north: a
+ * probe at 69.65N, 20.1E sits 44 km from Tromsø and two buckets away from it.
+ * The cosine is taken half a degree further poleward than the probe, since the
+ * match radius reaches that far in latitude too.
+ */
+function lonReach(lat: number): number {
+  const edge = Math.min(89.9, Math.abs(lat) + 0.5);
+  return Math.min(180, Math.ceil(MATCH_KM / (KM_PER_DEGREE * Math.cos(edge * R))));
+}
 
 /**
  * One-degree buckets, built on first use. 3,500 rows is small enough that a
@@ -49,7 +73,7 @@ function index(): Map<number, Row[]> {
   if (grid) return grid;
   grid = new Map();
   for (const row of CITIES) {
-    const key = cellKey(row[0] / 1e4, row[1] / 1e4);
+    const key = cellKey(Math.floor(row[0] / 1e4), Math.floor(row[1] / 1e4));
     const cell = grid.get(key);
     if (cell) cell.push(row);
     else grid.set(key, [row]);
@@ -68,11 +92,14 @@ export function cityFor(lat: number, lon: number, cc?: string | null): string | 
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   const country = cc?.toUpperCase();
   const cells = index();
+  const latBucket = Math.floor(lat);
+  const lonBucket = Math.floor(lon);
+  const reach = lonReach(lat);
   let best: Row | null = null;
   let bestKm = Infinity;
   for (let dLat = -1; dLat <= 1; dLat++) {
-    for (let dLon = -1; dLon <= 1; dLon++) {
-      for (const row of cells.get(cellKey(lat + dLat, lon + dLon)) ?? []) {
+    for (let dLon = -reach; dLon <= reach; dLon++) {
+      for (const row of cells.get(cellKey(latBucket + dLat, lonBucket + dLon)) ?? []) {
         const d = distanceKm(lat, lon, row[0] / 1e4, row[1] / 1e4);
         if (d > MATCH_KM) continue;
         // A metre of difference is noise in coordinates Atlas already rounds,
@@ -87,6 +114,44 @@ export function cityFor(lat: number, lon: number, cc?: string | null): string | 
     }
   }
   return best?.[3] ?? null;
+}
+
+/**
+ * Atlas's own admission that it could not place a probe any better than its
+ * country. The coordinates on such a probe are a national centroid, and a
+ * centroid lands near a real city often enough to be dangerous — the middle of
+ * the Netherlands is 12 km from Amersfoort. Naming one would invent a fact, so
+ * `cityOfProbe` refuses to.
+ */
+const COUNTRY_CENTROID_TAG = "system-auto-geoip-country";
+
+/**
+ * Territories small enough that the fallback point is still the right answer:
+ * the whole place fits inside the match radius, so "somewhere in Hong Kong" and
+ * "Hong Kong" are the same statement. Only add a territory whose full extent is
+ * under MATCH_KM — Hong Kong is ~40 km across, Macau ~10, Singapore ~50.
+ *
+ * It matters: 12 of Hong Kong's 61 connected probes carry the country tag, and
+ * blanking them would throw away something we actually know.
+ */
+const SINGLE_METRO = new Set(["HK", "MO", "SG"]);
+
+/**
+ * The city for a probe, or null — the entry point results should use, because
+ * it is the one that knows which probes must not be named.
+ *
+ * The tag is not a formality. Of China's 82 connected probes, 16 carry it and
+ * all 16 sit on `113.72, 34.77` — the fallback point GeoIP hands back for
+ * "somewhere in China", which happens to land beside Zhengzhou. Reading their
+ * coordinates would report a 16-probe cluster in 郑州 that does not exist.
+ */
+export function cityOfProbe(meta: ProbeMeta | undefined | null): string | null {
+  if (!meta) return null;
+  const cc = meta.country_code?.toUpperCase();
+  if (meta.tags?.some((t) => t?.slug === COUNTRY_CENTROID_TAG) && !(cc && SINGLE_METRO.has(cc))) {
+    return null;
+  }
+  return cityOf(meta.geometry, meta.country_code);
 }
 
 /** Convenience for the shape Atlas actually returns: `geometry.coordinates`. */
