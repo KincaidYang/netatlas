@@ -338,7 +338,12 @@ interface ProbeRow {
 }
 
 async function page(n: number): Promise<{ count?: number; results: ProbeRow[] }> {
-  const url = `${ATLAS_PROBES}?status=1&is_public=true&page_size=${PAGE}&page=${n}&fields=country_code,asn_v4,asn_v6`;
+  // No `is_public` filter, deliberately. `findProbes` — the path that actually
+  // selects probes for a measurement — does not filter on it either, so a
+  // catalogue that did would describe a different population from the one it
+  // plans queries against: 1,099 of Atlas's 14,650 connected probes are
+  // private, and every one of them can answer a measurement.
+  const url = `${ATLAS_PROBES}?status=1&page_size=${PAGE}&page=${n}&fields=country_code,asn_v4,asn_v6`;
   const res = await fetch(url, { headers: { "User-Agent": "netatlas" } });
   if (!res.ok) throw new Error(`atlas probes page ${n}: ${res.status}`);
   return (await res.json()) as { count?: number; results: ProbeRow[] };
@@ -384,28 +389,23 @@ function cleanHolder(raw: string): string {
 const seedById = new Map(SEED_NODES.map((n) => [n.id, n]));
 
 /**
- * Everything the last sweep saw, before any policy trims it down.
+ * Everything the last sweep saw, before any policy trims it down — or nothing.
  *
- * `probes` and `countries` come from the sweep itself rather than from the
- * groups: the groups hold only IPv4-addressable probes, so summing them would
- * report Atlas as 188 probes smaller than it is. `groups` is a count of
- * `cc-<v4 ASN>` pairs and is right to exclude them — they are not selectable.
- * A pre-alarm object has no stored sweep totals; deriving them from the groups
- * is then the best available answer until the next sweep replaces it.
+ * `probes` and `countries` come from the sweep itself and never from the
+ * groups. Summing groups looks tempting and is wrong twice over: they hold
+ * only IPv4-addressable probes, so the total would be short by the 188 that
+ * are IPv6-only. An object stored before this existed has groups but no
+ * totals, and answering with that sum would publish the known-wrong figure —
+ * for up to a full TTL, since a fresh snapshot is not re-swept. The console
+ * hides the line when totals are absent, which is the right answer until a
+ * sweep has actually counted.
  */
 function totalsOf(
   counts: Counts,
   swept: { probes: number; countries: number } | undefined,
-): { probes: number; groups: number; countries: number } {
-  const groups = Object.keys(counts).length;
-  if (swept) return { probes: swept.probes, groups, countries: swept.countries };
-  const countries = new Set<string>();
-  let probes = 0;
-  for (const [id, group] of Object.entries(counts)) {
-    probes += group[0];
-    countries.add(id.split("-")[0]);
-  }
-  return { probes, groups, countries: countries.size };
+): { probes: number; groups: number; countries: number } | undefined {
+  if (!swept) return undefined;
+  return { probes: swept.probes, groups: Object.keys(counts).length, countries: swept.countries };
 }
 
 /** One stored group as a displayable node. Shared by the catalogue and search. */

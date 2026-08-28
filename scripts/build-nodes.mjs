@@ -243,7 +243,9 @@ async function json(url) {
 async function fetchConnectedProbes() {
   const out = [];
   let url =
-    `${ATLAS}/probes/?status=1&is_public=true&page_size=500` +
+    // No `is_public` filter — the runtime sweep and `findProbes` both see
+    // private probes, and 1,099 of Atlas's connected probes are private.
+    `${ATLAS}/probes/?status=1&page_size=500` +
     `&fields=id,country_code,asn_v4,asn_v6,status`;
   let page = 0;
   while (url) {

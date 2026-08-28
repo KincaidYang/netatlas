@@ -110,9 +110,24 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   runtime needs it because a sweep finds pairs the build never saw; without the
   baked map they rendered under `??`. It covers all 249 ISO codes on purpose —
   a continent with no nodes simply does not render.
-- At runtime the `CatalogCache` DO re-sweeps Atlas on a 3h TTL. A page load
-  *triggers* a refresh but never waits for one — a sweep is 30 requests /
-  ~1 MB / ~5s, which is fine every few hours and abusive on every page load.
+- **The sweep does not filter `is_public`, and must not start doing so.** `findProbes`
+  — the path that actually selects probes for a measurement — does not filter
+  on it, so a catalogue that did would describe a different population from the
+  one it plans against. 1,099 of Atlas's 14,650 connected probes are private
+  and every one can answer a measurement; filtering them out hid 181
+  country×operator pairs from search and 16 nodes from the catalogue, and
+  understated the console's headline by 7.5%.
+- At runtime the `CatalogCache` DO re-sweeps Atlas on a 3h TTL, and on a
+  **Durable Object alarm** that reschedules itself. The lazy trigger alone put
+  the cost on the wrong visitor: the first one past the TTL starts the sweep,
+  does not wait, and is the only person served the stale answer. The first
+  alarm is armed from `refreshedAt + TTL`, not from now, or an object deployed
+  with a nearly-expired snapshot would sit stale for another full interval.
+  Both paths go through one memoised promise — a cold object arms an alarm that
+  is already due, so without it the alarm and the lazy trigger each run a full
+  30-request pass to produce one answer. A page load never *waits* for a sweep
+  either way: it is 30 requests / ~1 MB / ~5s, fine every few hours and abusive
+  on every page load.
 - Probe counts in the catalogue are a **display and query-planning hint**,
   never truth. Truth is the `available` / `unavailable` fields returned by a
   real request, and `available` is the *complete* live pool — the lookup pages
@@ -125,11 +140,9 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   bulk: `de-3209` really has 190, so a batch nominally inside the 400 budget
   matched past Atlas's 500-per-page cap, and the overflow silently dropped
   whichever nodes sorted last — they came back `unavailable` moments after
-  search had reported their probes. Pagination is still there as a rail (four
-  pages), but with real sizes it rarely fires. If the DO is unreachable the
-  guess returns and the rail catches it. Sizes come from the `is_public=true`
-  sweep while the lookup does not filter on it, so they *understate* the pool —
-  which now costs an extra page and nothing else, because reads run to the end.
+  search had reported their probes. Pagination still backs it up, but with real
+  sizes it rarely fires. If the DO is unreachable the guess returns and the
+  paging catches the overflow.
 - **Reads page until Atlas returns a short page**, never to a page budget. The
   first version of this capped at four pages, which repeated the mistake it was
   fixing: returning the first 2,000 of a larger pool while calling `available`
