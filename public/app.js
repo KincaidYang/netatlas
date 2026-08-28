@@ -666,7 +666,7 @@ function render(report, id) {
     `<button type="button" id="share">复制链接</button></div>`;
 
   const body = LATENCY_TYPES.has(report.type) ? latencyView(report, groups) : answerView(report);
-  const detail = view === "table" ? tableView(groups) : groups.map(sheet).join("");
+  const detail = view === "table" ? tableView(groups, report.type) : groups.map(sheet).join("");
   $("out").innerHTML = head + body + detail + cliHint(report, id);
 
   for (const btn of document.querySelectorAll("[data-view]")) {
@@ -807,10 +807,15 @@ function answerView(report) {
   // "A 104.26.14.87, A 104.26.15.87" says A twice for a query that was A, and
   // the record type is already in the header. Dropped only when every record
   // in the group shares one type — an ANY query genuinely needs it on each.
+  // Dropped only when the header already names the record type. An ANY query
+  // that happens to return one type still needs it on every line: the header
+  // says ANY, so without the prefix there is no way to tell whether the value
+  // is an MX, a TXT or an HINFO.
   const strip = (answer) => {
     const parts = answer.split(", ");
     const types = new Set(parts.map((r) => r.slice(0, r.indexOf(" "))));
-    return types.size === 1 && report.type === "dns"
+    const named = report.type === "dns" && report.queryType && report.queryType !== "ANY";
+    return named && types.size === 1 && types.has(report.queryType)
       ? parts.map((r) => r.slice(r.indexOf(" ") + 1))
       : parts;
   };
@@ -1032,7 +1037,7 @@ function probeLine(p, isOutlier) {
  * by scanning it, which is how check-host makes the same point without a
  * summary block at all.
  */
-function tableView(groups) {
+function tableView(groups, type) {
   const rows = groups.flatMap((g) =>
     g.probes.length === 0
       ? [
@@ -1042,15 +1047,13 @@ function tableView(groups) {
       : (() => {
           const odd = outliers(g.probes);
           return g.probes.map((p, i) => {
-            const d = p.detail || {};
-            const dst = d.dstAddr ?? (Array.isArray(d.answers) ? d.answers.map((a) => a.data).join(" ") : "");
-            const t = p.rttMs ?? d.avg;
+            const t = p.rttMs ?? p.detail?.avg;
             return (
               `<tr class="${p.ok ? "" : "down"}">` +
               `<td>${i === 0 ? esc(g.label) : ""}</td>` +
               `<td class="c">${esc(p.city ?? "")}</td>` +
               `<td class="n${odd.has(p.probeId) ? " slow" : ""}">${t == null ? "—" : esc(ms(t))}</td>` +
-              `<td class="a">${esc(dst)}</td>` +
+              `<td class="a">${outcome(type, p)}</td>` +
               `<td class="e">${p.ok ? "" : esc(p.error ?? "失败")}</td></tr>`
             );
           });
@@ -1060,6 +1063,62 @@ function tableView(groups) {
     `<table class="grid"><thead><tr><th>节点</th><th>城市</th><th>耗时</th>` +
     `<th>目标 / 答案</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   );
+}
+
+/**
+ * What this measurement actually found, for one probe, in one cell.
+ *
+ * Not the destination address for every type: an ntp run's finding is the
+ * clock offset and whether the server has heard from its upstream lately, and
+ * a table showing only round-trip time would report a server that is hours
+ * adrift as healthy — `ok` stays true, and the chart above plots RTT. Each
+ * type gets the field it exists to measure.
+ */
+function outcome(type, p) {
+  const d = p.detail || {};
+  if (!p.ok) return "";
+  if (type === "ntp") {
+    const bits = [];
+    if (d.offsetMs != null) bits.push(`<b>偏移 ${esc(ms(d.offsetMs))}</b>`);
+    if (d.stratum != null) bits.push(`层级 ${esc(d.stratum)}`);
+    // A free-running server still advertises a healthy stratum; this is how a
+    // reader catches that without opening the card.
+    if (d.refAgeSec != null && d.refAgeSec > 3600) bits.push(`<span class="slow">上游 ${esc(age(d.refAgeSec))}前</span>`);
+    if (d.probeClockAgeSec != null && d.probeClockAgeSec > 3600)
+      bits.push(`<span class="slow">探针时钟 ${esc(age(d.probeClockAgeSec))}前</span>`);
+    return bits.join(" · ");
+  }
+  if (type === "sslcert") {
+    const bits = [];
+    if (d.subjectCN) bits.push(esc(d.subjectCN));
+    if (d.daysLeft != null)
+      bits.push(`<span class="${d.daysLeft < 14 ? "slow" : ""}">剩 ${esc(d.daysLeft)} 天</span>`);
+    if (d.issuerO || d.issuerCN) bits.push(esc(d.issuerO ?? d.issuerCN));
+    return bits.join(" · ");
+  }
+  if (type === "http") {
+    const bits = [];
+    if (d.status != null) bits.push(`<b class="${d.status >= 400 ? "slow" : ""}">${esc(d.status)}</b>`);
+    if (d.httpVersion) bits.push(esc(d.httpVersion));
+    if (d.dstAddr) bits.push(esc(d.dstAddr));
+    return bits.join(" · ");
+  }
+  if (type === "traceroute") {
+    const bits = [];
+    if (d.hopCount != null) bits.push(`${esc(d.hopCount)} 跳`);
+    if (d.reached === false) bits.push(`<span class="slow">未到达</span>`);
+    if (d.lossyHops > 0) bits.push(`<span class="slow">${esc(d.lossyHops)} 跳有丢包</span>`);
+    if (d.dstAddr) bits.push(esc(d.dstAddr));
+    return bits.join(" · ");
+  }
+  if (type === "ping") {
+    const bits = [];
+    if (d.lossPct > 0) bits.push(`<span class="slow">丢包 ${esc(d.lossPct)}%</span>`);
+    if (d.dstAddr) bits.push(esc(d.dstAddr));
+    return bits.join(" · ");
+  }
+  if (Array.isArray(d.answers)) return esc(d.answers.map((a) => `${a.type} ${a.data}`).join(" "));
+  return esc(d.dstAddr ?? "");
 }
 
 /** The same run as a curl the reader can paste — the API is the product too. */
@@ -1084,10 +1143,10 @@ function markdown(report, id) {
       continue;
     }
     for (const p of g.probes) {
-      const d = p.detail || {};
-      const dst = d.dstAddr ?? (Array.isArray(d.answers) ? d.answers.map((a) => a.data).join(" ") : "");
-      const t = p.rttMs ?? d.avg;
-      lines.push(`| ${g.label} | ${p.city ?? ""} | ${t == null ? "—" : ms(t)} | ${p.ok ? dst : p.error ?? "失败"} |`);
+      // Same source as the table, or the two drift.
+      const t = p.rttMs ?? p.detail?.avg;
+      const cell = p.ok ? outcome(report.type, p).replace(/<[^>]*>/g, "") : (p.error ?? "失败");
+      lines.push(`| ${g.label} | ${p.city ?? ""} | ${t == null ? "—" : ms(t)} | ${cell} |`);
     }
   }
   lines.push("", `${location.origin}/m/${id}`);

@@ -325,11 +325,53 @@ its own; it exists to bound the work one request makes the Worker do.
 thrown as `QuotaError` (which carries its own `Response`), because Hono's
 `HTTPException` loses a custom response when the error handler re-serialises it.
 
+## The console shows the exception first
+
+`public/app.js` renders results. Three rules, each paid for:
+
+- **Order by what is wrong, in the console, not in `src/aggregate.ts`.** Nothing
+  returned → failures and loss → answers in the minority → a node with a probe
+  far from its peers → slowest to fastest. It used to sort by node id, so
+  `cn-4134` came before `hk-4760` for no reason a reader has, while
+  `latencyView`'s own comment said comparing is the entire job. The API keeps
+  its stable order: that order is part of what a shared `/m/<id>` returns.
+- **An outlier may reorder and highlight, never hide.** A node far from its
+  peers moves up and its number turns red. Folding "unremarkable" cards was
+  tried and removed: the rule for what counts as unremarkable was invented
+  here, and a bad sort costs an awkward order while a bad fold costs the thing
+  the reader came to find. Length is solved by the table view instead, where
+  the reader picks the density — cards up to twelve nodes, table beyond, and an
+  explicit choice sticks.
+- **Fold the answer, never the probe.** When every probe in a node returns the
+  same records, print them once — six nodes were repeating the same three
+  Cloudflare addresses thirty-six times. Each probe keeps its own line with its
+  city and its query time, because HKT returned *identical* records 12 ms and
+  156 ms apart and folding by answer would have deleted exactly that. TTL is
+  not part of "same": it is each resolver's cache remainder, `dnsKind.ts`
+  refuses to let it decide agreement, and including it split one node over 77
+  versus 120 seconds on identical addresses.
+
+Two display details that look like bugs and are not:
+
+- **`耗时` and `解析耗时` are different numbers.** The first is the measurement's
+  own round trip — for a dns run that *is* the time to resolve the target. The
+  second is `ttr`, the probe resolving the target's name before a ping or an
+  HTTP fetch, and it never appears in a dns run. DNS timing was measured,
+  summarised and returned by the API for a long time while the page showed
+  none of it, because dns is not in `LATENCY_TYPES` and the answer view
+  replaces the chart those types get.
+- **The table's result column is per type.** ntp shows clock offset and
+  stratum, sslcert the subject and days left, http the status, traceroute the
+  hop count — not the destination address for everything. A table showing only
+  round-trip time reports a server hours adrift as healthy, because `ok` stays
+  true and the chart above plots RTT. `outcome()` is the single source for this
+  and the Markdown export uses it too.
+
 ## File map
 
 ```
 public/index.html      console: markup + the whole design system (inline CSS)
-public/app.js          console behaviour: chips, polling, the two result views
+public/app.js          console: chips, search, polling, card + table result views
 public/fonts/          self-hosted IBM Plex woff2 — no Google Fonts (blocked in CN)
 data/nodes.json        generated node catalogue + label tables + policy
 data/cities.json       generated coordinate → city-name table
