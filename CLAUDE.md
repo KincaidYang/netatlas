@@ -119,10 +119,19 @@ So `data/cities.json` is ours, baked by `npm run cities:refresh`:
 - Two build-time rules were paid for with real data, don't undo them:
   `MIN_POP` is **30,000**, because at 150k the table missed Ashburn (43k) —
   the densest probe cluster in the US, 80 of them, called 阿灵顿 38 km away;
-  and entries are **swallowed by a neighbour ≥5× their size within 35 km**,
-  because cities15000 lists Tokyo's 台東 and London's Islington as cities, so
-  without it a Tokyo probe answers 目黒. Coverage is 96.7% of nameable probes,
-  100% in China.
+  and entries are **swallowed by a neighbour in the same country ≥5× their size
+  within 35 km**, because cities15000 lists Tokyo's 台東 and London's Islington
+  as cities, so without it a Tokyo probe answers 目黒. The same-country half of
+  that test is load-bearing: Kehl (DE, 35k) is 5 km from Strasbourg (FR, 274k),
+  and merging across the border makes a German probe report a French city.
+  Coverage is 96.7% of nameable probes, 100% in China.
+- The coverage report in the build script **mirrors the runtime rules on
+  purpose** — the same match radius, the same longitude reach, the same
+  `SINGLE_METRO` exception. When they drift it stops measuring what ships.
+- **The GeoNames credit is a licence obligation, not decoration.** cities15000
+  is CC BY 4.0 and `data/cities.json` redistributes a derived copy, so the
+  attribution travels in the file itself and appears in the console footer. It
+  goes when the GeoNames half goes, and not before.
 - Do not take Chinese names from the `alternatenames` column of
   `cities15000.txt` — it is not language-tagged, and it yields 宝安 for 深圳,
   古龍 for 科隆, ソウル特別市 for 首尔. Real `zh` names need the 203 MB

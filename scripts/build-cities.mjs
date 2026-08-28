@@ -22,6 +22,12 @@
  *      country/region label a reader sees always comes from CN_NAMES in
  *      build-nodes.mjs.
  *
+ * **GeoNames is CC BY 4.0 and we redistribute a derived copy of it**, so the
+ * credit is a licence obligation, not decoration: it is carried in the
+ * `attribution` field of data/cities.json and shown in the console footer. If
+ * the GeoNames half ever goes away, that is when the credit may go, and not
+ * before.
+ *
  * Run manually (`npm run cities:refresh`) and commit the result.
  */
 import { inflateRawSync } from "node:zlib";
@@ -50,6 +56,15 @@ const MATCH_KM = Number(process.env.MATCH_KM ?? 50);
 
 /** Handled entirely by CHINA below; GeoNames rows for these are dropped. */
 const CHINA_CODES = new Set(["CN", "HK", "MO", "TW"]);
+
+/**
+ * Mirrors SINGLE_METRO in src/geo.ts. A territory smaller than the match radius
+ * is one metro, so a country-level fallback point still names it correctly, and
+ * the runtime does name those probes. The coverage report has to agree, or it
+ * reports Hong Kong's 12 country-tagged probes as skipped while the shipped
+ * code names them — measuring something other than what runs.
+ */
+const SINGLE_METRO = new Set(["HK", "MO", "SG"]);
 
 /**
  * 中国城市表 —— 手写,一张表,不分层级。
@@ -302,10 +317,15 @@ function lookup(index, lat, lon, cc) {
  * for a probe in Tokyo, which is true of the address and useless to a reader
  * asking which city measured this.
  *
- * So a place is dropped when a neighbour within SWALLOW_KM is at least
- * SWALLOW_RATIO times its size — a ward next to its own metropolis, never two
- * cities that merely sit close. Fremont (230k) survives beside San José
- * (1.0M, 4.4x); 目黒 (280k) does not survive beside Tokyo (9.7M, 34x).
+ * So a place is dropped when a neighbour **in the same country** within
+ * SWALLOW_KM is at least SWALLOW_RATIO times its size — a ward next to its own
+ * metropolis, never two cities that merely sit close. Fremont (230k) survives
+ * beside San José (1.0M, 4.4x); 目黒 (280k) does not survive beside Tokyo
+ * (9.7M, 34x).
+ *
+ * The same-country test is not a detail. A city is never a subdivision of one
+ * in another country: Kehl (DE, 35k) is 5 km from Strasbourg (FR, 274k), and
+ * without it Kehl vanishes and a German probe reports a French city.
  */
 const SWALLOW_KM = 35;
 const SWALLOW_RATIO = 5;
@@ -323,7 +343,7 @@ function swallowSubdivisions(places) {
     for (let dLat = -1; dLat <= 1 && !swallowed; dLat++) {
       for (let dLon = -1; dLon <= 1 && !swallowed; dLon++) {
         for (const other of cells.get(`${Math.floor(p.lat) + dLat},${Math.floor(p.lon) + dLon}`) ?? []) {
-          if (other === p || other.pop < p.pop * SWALLOW_RATIO) continue;
+          if (other === p || other.cc !== p.cc || other.pop < p.pop * SWALLOW_RATIO) continue;
           if (km(p.lat, p.lon, other.lat, other.lon) <= SWALLOW_KM) {
             swallowed = true;
             break;
@@ -390,7 +410,9 @@ const main = async () => {
     const china = CHINA_CODES.has(p.country_code);
     // These 500 probes are geolocated to a country centroid, not a place.
     // Naming them would be inventing a fact.
-    const centroid = (p.tags ?? []).some((t) => t.slug === "system-auto-geoip-country");
+    const centroid =
+      (p.tags ?? []).some((t) => t.slug === "system-auto-geoip-country") &&
+      !SINGLE_METRO.has(p.country_code);
     if (centroid) {
       tally.countryOnly++;
       continue;
@@ -410,6 +432,13 @@ const main = async () => {
     generatedAt: new Date().toISOString(),
     matchKm: MATCH_KM,
     minPopulation: MIN_POP,
+    // Required by the licence, and travels with the data so it cannot be
+    // separated from it. Entries for CN/HK/MO/TW are ours, not GeoNames'.
+    attribution:
+      "Contains information from GeoNames (https://www.geonames.org/), " +
+      "licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). " +
+      "Modified: filtered by population, merged into metros, renamed, and " +
+      "entries for CN/HK/MO/TW replaced with a hand-written table.",
     cities,
   };
   process.stdout.write(JSON.stringify(out) + "\n");

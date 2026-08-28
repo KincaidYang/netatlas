@@ -39,6 +39,14 @@ describe("cityFor", () => {
     expect(cityFor(37.4685, -121.9215, "US")).toBe("Fremont");
   });
 
+  it("never folds a city into one across a border", () => {
+    // Kehl (DE, 35k) is 5 km from Strasbourg (FR, 274k) and 7.8x smaller, so
+    // the population-only merge deleted it and a German probe reported a
+    // French city. A city is never a subdivision of one in another country.
+    expect(cityFor(48.5736, 7.8156, "DE")).toBe("Kehl");
+    expect(cityFor(48.5839, 7.7455, "FR")).toBe("斯特拉斯堡");
+  });
+
   it("answers with the metro, not the ward it happens to sit in", () => {
     // cities15000 carries Tokyo's 台東, London's Islington and Singapore's
     // housing estates as if they were cities. Build-time merging folds a place
