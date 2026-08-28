@@ -53,4 +53,24 @@ app.onError((err, c) => {
 
 app.notFound((c) => c.json({ error: "not found" }, 404));
 
-export default app;
+/**
+ * Hourly cron, and the only thing that can start the catalogue from nothing.
+ *
+ * `CatalogCache` keeps itself refreshed with an alarm that reschedules after
+ * every sweep, but the first alarm is armed inside `fetch()`. An object that
+ * predates alarms — every deployed one, the first time that shipped — arms
+ * nothing until something reaches it, so a deploy with no traffic afterwards
+ * would leave the sweep asleep and hand the next visitor a stale catalogue.
+ * That is the exact dependency on passing traffic the alarm was added to end,
+ * surviving in the alarm's own initialisation.
+ *
+ * One request to the object per hour. It arms the alarm if unarmed and sweeps
+ * only when the snapshot is past its TTL, so the usual outcome is nothing.
+ */
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const stub = env.CATALOG.get(env.CATALOG.idFromName("v1"));
+    ctx.waitUntil(stub.fetch("https://catalog/nodes"));
+  },
+};

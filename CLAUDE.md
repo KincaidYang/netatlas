@@ -125,7 +125,11 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   with a nearly-expired snapshot would sit stale for another full interval.
   Both paths go through one memoised promise — a cold object arms an alarm that
   is already due, so without it the alarm and the lazy trigger each run a full
-  30-request pass to produce one answer. A page load never *waits* for a sweep
+  30-request pass to produce one answer. **An hourly cron trigger pokes the
+  object**, because the first alarm is armed inside `fetch()`: an object that
+  predates alarms arms nothing until something reaches it, so a deploy followed
+  by no traffic would leave the sweep asleep — the dependency on passing
+  traffic surviving inside the alarm's own initialisation. A page load never *waits* for a sweep
   either way: it is 30 requests / ~1 MB / ~5s, fine every few hours and abusive
   on every page load.
 - Probe counts in the catalogue are a **display and query-planning hint**,
@@ -325,7 +329,7 @@ data/cities.json       generated coordinate → city-name table
 scripts/build-nodes.mjs  regenerates data/nodes.json from live Atlas data
 scripts/build-cities.mjs regenerates data/cities.json (China by hand, rest GeoNames)
 
-src/index.ts           route assembly, error handling, DO exports
+src/index.ts           route assembly, error handling, DO exports, cron
 src/routes/probe.ts    create + results + the quota chain, in that order
 src/routes/meta.ts     nodes / presets / types / anchors / quota
 src/measurements/      one file per type + the MeasurementKind contract

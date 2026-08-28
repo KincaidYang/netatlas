@@ -14,7 +14,14 @@
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["CatalogCache", "RateLimiter", "DailyBudget"] }
-  ]
+  ],
+  // Bootstraps the catalogue. CatalogCache reschedules its own sweeps with a
+  // Durable Object alarm, but nothing arms the first one until something talks
+  // to the object — so a deploy followed by no traffic would leave it asleep
+  // and the next visitor would still be served a stale catalogue. This poke
+  // costs one Durable Object fetch an hour and usually does nothing: the object
+  // only sweeps when its snapshot is past the TTL.
+  "triggers": { "crons": ["0 * * * *"] }
   // Secrets (set with `wrangler secret put <NAME>`, do NOT put them here):
   //   ATLAS_API_KEY  — RIPE Atlas API key with credits (required)
   //   ADMIN_TOKEN    — optional; guards /admin/* (budget inspection, catalogue refresh)
