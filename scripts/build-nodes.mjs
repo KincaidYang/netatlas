@@ -283,7 +283,11 @@ const main = async () => {
   const groups = new Map();
   for (const p of probes) {
     const cc = p.country_code;
-    const asn = p.asn_v4 ?? p.asn_v6;
+    // Keyed by the v4 ASN only: a node id is `cc-<v4 ASN>`, so an IPv6-only
+    // probe (188 of them are) cannot be addressed by one. Falling back to the
+    // v6 ASN invented groups that resolve to nothing and inflated the IPv4
+    // count of any node that happens to share the number.
+    const asn = p.asn_v4;
     if (!cc || !asn) continue;
     const id = `${cc.toLowerCase()}-${asn}`;
     let g = groups.get(id);

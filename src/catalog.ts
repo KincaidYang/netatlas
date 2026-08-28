@@ -160,7 +160,14 @@ export class CatalogCache implements DurableObject {
     const groups = new Map<string, { v4: number; v6: number; v6asn: Map<number, number> }>();
     for (const probe of [...first.results, ...rest]) {
       const cc = probe.country_code?.toLowerCase();
-      const asn = probe.asn_v4 ?? probe.asn_v6;
+      // A node id is `cc-<v4 ASN>`, so a probe without one cannot be addressed
+      // by any node — 188 of Atlas's connected probes are IPv6-only. Keying
+      // them by their v6 ASN instead built groups that resolve to nothing, and
+      // counted them as IPv4 probes of whichever node shares that number: KPN
+      // uses 1136 for both families, so `nl-1136` was credited with probes that
+      // have no IPv4 at all. They remain reachable for `af: 6` on a catalogued
+      // node, which queries by v6 ASN and never consults these counts.
+      const asn = probe.asn_v4;
       if (!cc || !asn) continue;
       const id = `${cc}-${asn}`;
       let g = groups.get(id);

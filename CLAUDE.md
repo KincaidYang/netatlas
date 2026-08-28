@@ -127,7 +127,24 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   whichever nodes sorted last — they came back `unavailable` moments after
   search had reported their probes. Pagination is still there as a rail (four
   pages), but with real sizes it rarely fires. If the DO is unreachable the
-  guess returns and the rail catches it.
+  guess returns and the rail catches it. Sizes come from the `is_public=true`
+  sweep while the lookup does not filter on it, so they *understate* the pool —
+  which now costs an extra page and nothing else, because reads run to the end.
+- **Reads page until Atlas returns a short page**, never to a page budget. The
+  first version of this capped at four pages, which repeated the mistake it was
+  fixing: returning the first 2,000 of a larger pool while calling `available`
+  complete. `MAX_PAGES` is a runaway guard against a misbehaving API, not a
+  budget — the largest country×operator group in Atlas holds 309 probes, so a
+  single node has never needed a second page.
+- **A group is keyed by the probe's v4 ASN, never falling back to its v6 one.**
+  188 connected probes are IPv6-only, and keying those by their v6 ASN invented
+  61 groups that resolve to nothing (search offered them; selecting one always
+  returned `unavailable`) and credited 80 real nodes with IPv4 probes that have
+  no IPv4 — KPN uses 1136 for both families, so `nl-1136` counted them, and
+  `de-3320` advertised 316 where it has 310. Those probes stay reachable for
+  `af: 6` on a catalogued node, which queries by v6 ASN and never reads these
+  counts. Both sweeps do this; `scripts/build-nodes.mjs` and `src/catalog.ts`
+  must agree.
 - **A batch that fails mid-pagination is retried from page one**, so probes
   already collected arrive a second time. Pools are deduplicated before they
   are counted or sampled — otherwise `available` inflates (600 reported as

@@ -299,31 +299,84 @@ export async function resolveNodes(
 
   const PAGE = 500;
   /**
-   * Bound on pages per lookup. One page was not enough: chunk planning sizes a
-   * node the catalogue never saw at a synthetic 50 probes, but `de-3209` really
-   * has 190, so a chunk nominally under the 400 budget can match well past
-   * Atlas's 500-per-page cap. The overflow is not random — it silently drops
-   * whichever nodes sort last, so a node the search just reported as having
-   * probes comes back `unavailable`.
+   * Runaway guard, not a page budget.
+   *
+   * One page was not enough: chunk planning sizes a node the catalogue never
+   * saw at a synthetic 50 probes, but `de-3209` really has 190, so a chunk
+   * nominally under the 400 budget can match well past Atlas's 500-per-page
+   * cap, and the overflow silently drops whichever nodes sort last.
+   *
+   * The first fix capped this at four pages, which was the same mistake one
+   * level up: 2,000 probes is a number I chose, and returning the first 2,000
+   * of a larger pool while calling `available` complete is exactly the quiet
+   * overstatement the cap was meant to prevent. Reads now run until Atlas
+   * returns a short page. This bound exists only so a misbehaving API cannot
+   * spin forever — the largest country×operator group in Atlas today holds 309
+   * probes, so a single node has never needed a second page.
    */
-  const MAX_PAGES = 4;
+  const MAX_PAGES = 20;
 
-  const lookup = async (group: Node[], keyBy: 4 | 6): Promise<void> => {
+  /**
+   * Every page for one batch. Never throws.
+   *
+   * A caller told "the read did not finish" can do something better than a
+   * caller handed an exception, which is the whole point: an incomplete batch
+   * read is ambiguous in a specific way — some of its nodes may be missing
+   * entirely and there is no way to tell which — and that ambiguity is what
+   * the caller resolves.
+   */
+  const readPages = async (
+    group: Node[],
+    keyBy: 4 | 6,
+  ): Promise<{ probes: ProbeMeta[]; complete: boolean }> => {
     const query = {
       asns: [...new Set(group.map((n) => (keyBy === 6 ? (n.asnV6 ?? n.asn) : n.asn)))],
       countries: [...new Set(group.map((n) => n.cc))],
       af: keyBy,
       limit: PAGE,
     };
+    const probes: ProbeMeta[] = [];
     for (let page = 1; page <= MAX_PAGES; page++) {
-      const found = await client.findProbes({ ...query, page });
-      collect(group, found, keyBy);
+      let found: ProbeMeta[];
+      try {
+        found = await client.findProbes({ ...query, page });
+      } catch {
+        // One bad input — an unknown country code, say — makes Atlas reject the
+        // whole request, and a transient error does the same.
+        return { probes, complete: false };
+      }
+      probes.push(...found);
       // A short page is the last page. Deliberately *not* stopping as soon as
       // every node has enough probes: `available` is reported to the caller as
       // the live pool size, and stopping early would quietly turn it into a
-      // lower bound. Planning by live counts keeps this to one page anyway.
-      if (found.length < PAGE) return;
+      // lower bound.
+      if (found.length < PAGE) return { probes, complete: true };
     }
+    return { probes, complete: false };
+  };
+
+  /**
+   * Fill the pools for one batch, falling back to reading each node alone.
+   *
+   * An incomplete batch read is **discarded**, not used: it cannot say which of
+   * its nodes it failed to see, so keeping it would leave some pools whole and
+   * others silently short. Re-reading node by node makes every pool the result
+   * of exactly one read at one moment — which is what lets `available` be a
+   * count rather than two half-answers added together, makes duplicate probe
+   * ids structurally impossible, and lets `dominantV6` vote on a node's whole
+   * set instead of whatever a partial page happened to contain.
+   *
+   * A single node that still cannot be read whole keeps what it got. Fewer
+   * probes than it has beats reporting a live node as unavailable, and there
+   * is no smaller batch left to fall back to.
+   */
+  const read = async (group: Node[], keyBy: 4 | 6): Promise<void> => {
+    const { probes, complete } = await readPages(group, keyBy);
+    if (!complete && group.length > 1) {
+      await Promise.all(group.map((node) => read([node], keyBy)));
+      return;
+    }
+    collect(group, probes, keyBy);
   };
 
   /**
@@ -350,33 +403,16 @@ export async function resolveNodes(
         const key = keyFor(node);
         byKey.set(key, [...(byKey.get(key) ?? []), node]);
       }
-      return [...byKey.entries()].map(async ([keyBy, group]) => {
-        try {
-          await lookup(group, keyBy);
-        } catch {
-          // One bad input (an unknown country code, say) makes Atlas reject the
-          // whole batch. Retry node by node so a single bogus entry degrades to
-          // "unavailable" instead of failing everybody else's measurement.
-          await Promise.all(
-            group.map(async (node) => {
-              try {
-                await lookup([node], keyBy);
-              } catch {
-                /* leaves the pool empty → reported as unavailable */
-              }
-            }),
-          );
-        }
-      });
+      return [...byKey.entries()].map(([keyBy, group]) => read(group, keyBy));
     }),
   );
 
   // Narrow each unknown-v6 node to a single IPv6 ASN, so a selection cannot
   // mix an operator's native v6 with a tunnel broker's.
   for (const [id, candidates] of v6Candidates) {
-    // A page that failed mid-batch is retried from page one, so the same probe
-    // can arrive twice. Left in, it skews the vote below and then lands in the
-    // pool twice over.
+    // Structurally impossible now that a node's probes come from one read, but
+    // a duplicate here would skew the vote and then land in the pool twice, so
+    // the guard stays rather than resting on that argument.
     const unique = [...new Map(candidates.map((p) => [p.id, p])).values()];
     const asn = dominantV6(unique);
     if (asn === null) continue;
@@ -388,10 +424,10 @@ export async function resolveNodes(
   const unavailable: string[] = [];
   const available: Record<string, number> = {};
   for (const node of nodes) {
-    // Deduplicated for the same reason: a batch that failed on a later page is
-    // retried node by node from page one, and the probes already collected are
-    // still in here. Counting them twice inflates `available`, and shuffling a
-    // list with repeats can hand Atlas the same probe id twice in one group.
+    // Same guard. `read()` gives each node exactly one source, so this should
+    // never find anything — but counting a probe twice inflates `available`,
+    // and shuffling a list with repeats hands Atlas the same probe id twice in
+    // one group, which is too quiet a failure to leave to an argument.
     const pool = [...new Set(pools.get(node.id) ?? [])];
     available[node.id] = pool.length;
     const chosen = shuffle(pool).slice(0, per);

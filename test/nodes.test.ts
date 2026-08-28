@@ -321,6 +321,16 @@ describe("paginated probe lookup", () => {
     expect(pages.length).toBeGreaterThan(1);
   });
 
+  it("pages until Atlas says it is done, not until a page budget runs out", async () => {
+    // 2,500 probes is five full pages. A four-page cap would have returned
+    // 2,000 of them and called `available` complete, which is the same quiet
+    // overstatement the pagination fix existed to remove.
+    const { client, pages } = pagedClient(many(3320, 2500, 1));
+    const out = await resolveNodes(client, ["de-3320"], 1, 4, 50);
+    expect(out.available["de-3320"]).toBe(2500);
+    expect(pages).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
   it("reports the real pool size, not just enough of it", async () => {
     // One probe is all the request needs, but `available` is documented as the
     // live pool size — stopping at the first page would quietly make it a
@@ -405,5 +415,56 @@ describe("retry after a partial page failure", () => {
       const ids = String(group.value).split(",");
       expect(new Set(ids).size).toBe(ids.length);
     }
+  });
+});
+
+describe("IPv6 ASN vote across pages", () => {
+  const pagedClient = (probes: ProbeMeta[]) => {
+    const client = {
+      findProbes: async (q: { asns?: number[]; af?: 4 | 6; page?: number }) => {
+        const page = q.page ?? 1;
+        const key = q.af === 6 ? "asn_v6" : "asn_v4";
+        const matching = probes.filter((p) => q.asns?.includes((p as never)[key] ?? 0));
+        return matching.slice((page - 1) * 500, page * 500);
+      },
+    } as unknown as AtlasClient;
+    return { client };
+  };
+
+  /** An uncatalogued operator whose IPv6 rides a second ASN. */
+  const probe = (id: number, v6: number): ProbeMeta => ({
+    id,
+    country_code: "DE",
+    asn_v4: 65001,
+    asn_v6: v6,
+    status: 1,
+  });
+
+  it("counts the whole pool, not just the first page, when picking the v6 ASN", async () => {
+    // Page one alone says 65010 wins 300 to 200. The rest of the pool turns it
+    // round: 65011 has 350 in total. A vote on one page picks the loser and
+    // then selects probes on the wrong network.
+    const page1 = [
+      ...Array.from({ length: 300 }, (_, i) => probe(i + 1, 65010)),
+      ...Array.from({ length: 200 }, (_, i) => probe(i + 1000, 65011)),
+    ];
+    const page2 = Array.from({ length: 150 }, (_, i) => probe(i + 2000, 65011));
+    const { client } = pagedClient([...page1, ...page2]);
+
+    const out = await resolveNodes(client, ["de-65001"], 1, 6, 50);
+    expect(out.available["de-65001"]).toBe(350);
+  });
+
+  it("never mixes two IPv6 ASNs into one node's selection", async () => {
+    const mixed = [
+      ...Array.from({ length: 5 }, (_, i) => probe(i + 1, 65010)),
+      ...Array.from({ length: 40 }, (_, i) => probe(i + 100, 65011)),
+    ];
+    const { client } = pagedClient(mixed);
+    const out = await resolveNodes(client, ["de-65001"], 3, 6, 50);
+    const chosen = String(out.probes[0].value).split(",").map(Number);
+    // Every selected probe must belong to the winning ASN — a tunnel broker's
+    // AS is a different network, whatever the node label claims.
+    expect(chosen.every((id) => id >= 100)).toBe(true);
   });
 });
