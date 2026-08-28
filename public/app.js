@@ -887,8 +887,15 @@ function outliers(probes) {
   const min = Math.min(...times);
   const max = Math.max(...times);
   if (max < min * OUTLIER_RATIO || max - min < OUTLIER_GAP_MS) return new Set();
-  // Only the far end is the finding; the fast probes are the baseline.
-  return new Set(probes.filter((p) => p.rttMs != null && p.rttMs >= min * OUTLIER_RATIO).map((p) => p.probeId));
+  // Both conditions again, per probe. The group gate only says *someone* is far
+  // out; applying the ratio alone here then reddens everyone above 3x the
+  // baseline, including a probe 30 ms away that the documented 100 ms rule
+  // would never have called an outlier. 10 / 40 / 150 ms should mark the 150.
+  return new Set(
+    probes
+      .filter((p) => p.rttMs != null && p.rttMs >= min * OUTLIER_RATIO && p.rttMs - min >= OUTLIER_GAP_MS)
+      .map((p) => p.probeId),
+  );
 }
 
 /**
@@ -1076,7 +1083,12 @@ function tableView(groups, type) {
  */
 function outcome(type, p) {
   const d = p.detail || {};
-  if (!p.ok) return "";
+  // Deliberately not short-circuiting on `!p.ok`. A traceroute that never
+  // arrives is marked failed and still carries the hop count, the timeouts and
+  // how far it got — which is the entire diagnostic value of a failed
+  // traceroute. An expired certificate is failed and still has a subject and a
+  // date. The error column says what went wrong; this column keeps saying what
+  // was seen.
   if (type === "ntp") {
     const bits = [];
     if (d.offsetMs != null) bits.push(`<b>偏移 ${esc(ms(d.offsetMs))}</b>`);
@@ -1092,7 +1104,11 @@ function outcome(type, p) {
     const bits = [];
     if (d.subjectCN) bits.push(esc(d.subjectCN));
     if (d.daysLeft != null)
-      bits.push(`<span class="${d.daysLeft < 14 ? "slow" : ""}">剩 ${esc(d.daysLeft)} 天</span>`);
+      bits.push(
+        d.daysLeft < 0
+          ? `<span class="slow">已过期 ${esc(Math.abs(d.daysLeft))} 天</span>`
+          : `<span class="${d.daysLeft < 14 ? "slow" : ""}">剩 ${esc(d.daysLeft)} 天</span>`,
+      );
     if (d.issuerO || d.issuerCN) bits.push(esc(d.issuerO ?? d.issuerCN));
     return bits.join(" · ");
   }
@@ -1108,6 +1124,7 @@ function outcome(type, p) {
     if (d.hopCount != null) bits.push(`${esc(d.hopCount)} 跳`);
     if (d.reached === false) bits.push(`<span class="slow">未到达</span>`);
     if (d.lossyHops > 0) bits.push(`<span class="slow">${esc(d.lossyHops)} 跳有丢包</span>`);
+    if (d.timeouts > 0) bits.push(`<span class="slow">${esc(d.timeouts)} 跳超时</span>`);
     if (d.dstAddr) bits.push(esc(d.dstAddr));
     return bits.join(" · ");
   }
