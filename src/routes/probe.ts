@@ -42,6 +42,29 @@ function selectedNodes(body: CreateBody): string[] {
   return list;
 }
 
+/**
+ * Live probe counts for the requested nodes, from the catalogue sweep.
+ *
+ * Purely a query plan: `resolveNodes` decides how many nodes to put in one
+ * Atlas lookup, and Atlas caps a page at 500. Guessing 50 for a node the
+ * catalogue never listed made batches overflow that cap, which silently
+ * dropped whichever nodes sorted last. Never used as an answer — the counts
+ * are up to three hours old, while `available` comes from the live lookup.
+ *
+ * Best effort: if the catalogue is unreachable, resolution falls back to the
+ * guess and pages through the overflow instead.
+ */
+async function liveSizes(env: Env, nodeIds: string[]): Promise<Record<string, number>> {
+  try {
+    const stub = env.CATALOG.get(env.CATALOG.idFromName("v1"));
+    const res = await stub.fetch(`https://catalog/nodes?ids=${encodeURIComponent(nodeIds.join(","))}`);
+    const body = await res.json<{ sizes?: Record<string, number> }>();
+    return body.sizes ?? {};
+  } catch {
+    return {};
+  }
+}
+
 /** How long a request will wait behind another one already creating the same measurement. */
 const DEDUPE_WAIT_MS = 8000;
 
@@ -106,7 +129,14 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
   let take: Awaited<ReturnType<typeof rateCheck>>;
   try {
     // Reads are public, so node resolution always uses the platform key.
-    selection = await resolveNodes(new AtlasClient(env.ATLAS_API_KEY), nodeIds, perNode, af, policy.maxProbes);
+    selection = await resolveNodes(
+      new AtlasClient(env.ATLAS_API_KEY),
+      nodeIds,
+      perNode,
+      af,
+      policy.maxProbes,
+      await liveSizes(env, nodeIds),
+    );
     const totalProbes = Object.values(selection.requested).reduce((a, b) => a + b, 0);
     credits = kind.creditsPerProbe(params) * totalProbes;
 

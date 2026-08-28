@@ -23,6 +23,8 @@ export interface ProbeQuery {
   countries?: string[];
   af?: 4 | 6;
   limit?: number;
+  /** 1-based. Atlas caps a page at 500 however large `limit` is. */
+  page?: number;
 }
 
 /**
@@ -126,6 +128,7 @@ export class AtlasClient {
     });
     if (q.asns?.length) params.set(q.af === 6 ? "asn_v6__in" : "asn_v4__in", q.asns.join(","));
     if (q.countries?.length) params.set("country_code__in", q.countries.join(","));
+    if (q.page && q.page > 1) params.set("page", String(q.page));
     const data = await this.get<{ results?: ProbeMeta[] }>(`/probes/?${params}`, {});
     return data.results ?? [];
   }

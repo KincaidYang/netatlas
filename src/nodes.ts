@@ -186,6 +186,13 @@ export async function resolveNodes(
   perNode: number,
   af: 4 | 6,
   maxProbes: number = MAX_TOTAL_PROBES,
+  /**
+   * Live probe counts per node id, from the catalogue sweep. Only used to plan
+   * how many nodes to put in one Atlas lookup — never as an answer. Without it
+   * an uncatalogued node is guessed at 50 probes, and `de-3209` really has 190,
+   * so a batch nominally inside the budget overflows the 500-per-page cap.
+   */
+  sizes: Record<string, number> = {},
 ): Promise<ResolvedSelection> {
   const ids = [...new Set(nodeIds.map((n) => n.trim().toLowerCase()))].filter(Boolean);
   if (ids.length === 0) throw new HTTPException(400, { message: "'nodes' must list at least one node" });
@@ -199,7 +206,8 @@ export async function resolveNodes(
   // which is the same answer a stale catalogue entry would have produced.
   const nodes = ids.map((id) => {
     const seeded = BY_ID.get(id);
-    if (seeded) return seeded;
+    // The seed is a build-time snapshot; a live count is a better query plan.
+    if (seeded) return sizes[id] ? { ...seeded, probes: sizes[id] } : seeded;
     const parsed = parseNodeId(id);
     if (!parsed) {
       throw new HTTPException(400, {
@@ -218,7 +226,7 @@ export async function resolveNodes(
       label: labelForId(id),
       holder: null,
       continent: "??",
-      probes: 50, // unknown size; assume mid-sized for query planning
+      probes: sizes[id] ?? 50, // live count when we have one; a guess otherwise
       probesV6: 0,
     } satisfies Node;
   });
@@ -289,13 +297,34 @@ export async function resolveNodes(
     }
   };
 
-  const lookup = (group: Node[], keyBy: 4 | 6): Promise<ProbeMeta[]> =>
-    client.findProbes({
+  const PAGE = 500;
+  /**
+   * Bound on pages per lookup. One page was not enough: chunk planning sizes a
+   * node the catalogue never saw at a synthetic 50 probes, but `de-3209` really
+   * has 190, so a chunk nominally under the 400 budget can match well past
+   * Atlas's 500-per-page cap. The overflow is not random — it silently drops
+   * whichever nodes sort last, so a node the search just reported as having
+   * probes comes back `unavailable`.
+   */
+  const MAX_PAGES = 4;
+
+  const lookup = async (group: Node[], keyBy: 4 | 6): Promise<void> => {
+    const query = {
       asns: [...new Set(group.map((n) => (keyBy === 6 ? (n.asnV6 ?? n.asn) : n.asn)))],
       countries: [...new Set(group.map((n) => n.cc))],
       af: keyBy,
-      limit: 500,
-    });
+      limit: PAGE,
+    };
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const found = await client.findProbes({ ...query, page });
+      collect(group, found, keyBy);
+      // A short page is the last page. Deliberately *not* stopping as soon as
+      // every node has enough probes: `available` is reported to the caller as
+      // the live pool size, and stopping early would quietly turn it into a
+      // lower bound. Planning by live counts keeps this to one page anyway.
+      if (found.length < PAGE) return;
+    }
+  };
 
   /**
    * Which ASN this node's IPv6 actually belongs to, when the catalogue never
@@ -323,7 +352,7 @@ export async function resolveNodes(
       }
       return [...byKey.entries()].map(async ([keyBy, group]) => {
         try {
-          collect(group, await lookup(group, keyBy), keyBy);
+          await lookup(group, keyBy);
         } catch {
           // One bad input (an unknown country code, say) makes Atlas reject the
           // whole batch. Retry node by node so a single bogus entry degrades to
@@ -331,7 +360,7 @@ export async function resolveNodes(
           await Promise.all(
             group.map(async (node) => {
               try {
-                collect([node], await lookup([node], keyBy), keyBy);
+                await lookup([node], keyBy);
               } catch {
                 /* leaves the pool empty → reported as unavailable */
               }

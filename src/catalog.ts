@@ -75,6 +75,7 @@ export class CatalogCache implements DurableObject {
     const url = new URL(request.url);
     const force = url.searchParams.get("force") === "1";
     const query = url.searchParams.get("q")?.trim() ?? "";
+    const sizeFor = url.searchParams.get("ids")?.trim() ?? "";
 
     const [counts, names, refreshedAt] = await Promise.all([
       this.loadSharded<Counts[string]>("groups", "counts"),
@@ -89,6 +90,18 @@ export class CatalogCache implements DurableObject {
         this.refreshing = null;
       });
       this.state.waitUntil(this.refreshing);
+    }
+
+    // Live probe counts for specific node ids. `resolveNodes` plans its Atlas
+    // lookups by size, and it has no other way to know how big a pair it never
+    // catalogued really is — guessing made batches overflow Atlas's page cap.
+    if (sizeFor) {
+      const sizes: Record<string, number> = {};
+      for (const id of sizeFor.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+        const group = counts?.[id];
+        if (group) sizes[id] = group[0];
+      }
+      return Response.json({ sizes, source: counts ? "live" : "seed" });
     }
 
     // Search looks through every stored pair, not the curated list — that is the

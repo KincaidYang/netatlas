@@ -433,11 +433,19 @@ function syncTypeHint() {
  * or — worse, because it is silent — spending twice the credits displayed.
  */
 let quotaPending = null;
+let quotaSeq = 0;
 
 function refreshQuota() {
+  // Awaiting the newest promise is not enough on its own: two key changes in
+  // quick succession leave two requests in flight, and the older one still
+  // writes when it lands. Going BYOK → anonymous that way restores the BYOK
+  // allowance after the anonymous answer, which is exactly the state that
+  // spends twice what the cost line shows.
+  const seq = ++quotaSeq;
   quotaPending = (async () => {
     try {
       const q = await api("/quota");
+      if (seq !== quotaSeq) return;
       state.limits = { maxNodes: q.maxNodes, maxPerNode: q.maxPerNode, maxProbes: q.maxProbes };
       if (state.selected.size > q.maxNodes) {
         state.selected = new Set([...state.selected].slice(0, q.maxNodes));
@@ -448,12 +456,12 @@ function refreshQuota() {
           ? `使用你自己的 Key · 可选 <b>${q.maxNodes}</b> 个节点`
           : `匿名额度 <b>${q.tokensLeft}</b>/${q.tokenCapacity} 次${daily}`;
     } catch {
-      $("quota").textContent = "";
+      if (seq === quotaSeq) $("quota").textContent = "";
     } finally {
       // Unconditionally, not only when the selection had to be trimmed: the
       // probe budget moves with the tier, so 30 nodes can go from one probe
       // each to two without the selection changing at all.
-      syncChips();
+      if (seq === quotaSeq) syncChips();
     }
   })();
   return quotaPending;

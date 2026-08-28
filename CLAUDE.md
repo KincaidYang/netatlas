@@ -115,7 +115,19 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   ~1 MB / ~5s, which is fine every few hours and abusive on every page load.
 - Probe counts in the catalogue are a **display and query-planning hint**,
   never truth. Truth is the `available` / `unavailable` fields returned by a
-  real request.
+  real request, and `available` is the *complete* live pool — the lookup pages
+  to the end rather than stopping once it has enough, because a number
+  documented as a pool size must not quietly become a lower bound.
+- **Plan the lookups from live counts.** `resolveNodes` takes a `sizes` map
+  (`liveSizes()` in `src/routes/probe.ts` reads it from the `CatalogCache` DO)
+  and uses it only to decide how many nodes go in one Atlas query. Guessing 50
+  probes for an uncatalogued node was fine until search made them selectable in
+  bulk: `de-3209` really has 190, so a batch nominally inside the 400 budget
+  matched past Atlas's 500-per-page cap, and the overflow silently dropped
+  whichever nodes sorted last — they came back `unavailable` moments after
+  search had reported their probes. Pagination is still there as a rail (four
+  pages), but with real sizes it rarely fires. If the DO is unreachable the
+  guess returns and the rail catches it.
 
 ## Where the city name comes from
 

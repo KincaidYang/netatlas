@@ -286,3 +286,71 @@ describe("node search", () => {
     expect(searchNodes(pool, "e", 2).length).toBeLessThanOrEqual(2);
   });
 });
+
+describe("paginated probe lookup", () => {
+  /** A client whose pages are capped at 500, the way Atlas actually behaves. */
+  const pagedClient = (probes: ProbeMeta[]) => {
+    const pages: number[] = [];
+    const client = {
+      findProbes: async (q: { asns?: number[]; page?: number }) => {
+        const page = q.page ?? 1;
+        pages.push(page);
+        const matching = probes.filter((p) => q.asns?.includes(p.asn_v4 ?? 0));
+        return matching.slice((page - 1) * 500, page * 500);
+      },
+    } as unknown as AtlasClient;
+    return { client, pages };
+  };
+
+  const many = (asn: number, n: number, from: number): ProbeMeta[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: from + i,
+      country_code: "DE",
+      asn_v4: asn,
+      asn_v6: asn,
+      status: 1,
+    }));
+
+  it("keeps looking past the first page when a batch overflows it", async () => {
+    // 600 probes on the first ASN would fill page one entirely, leaving the
+    // second ASN invisible and wrongly reported as having nothing.
+    const { client, pages } = pagedClient([...many(3320, 600, 1), ...many(3209, 40, 1000)]);
+    const out = await resolveNodes(client, ["de-3320", "de-3209"], 3, 4, 50);
+    expect(out.unavailable).toEqual([]);
+    expect(out.requested["de-3209"]).toBe(3);
+    expect(pages.length).toBeGreaterThan(1);
+  });
+
+  it("reports the real pool size, not just enough of it", async () => {
+    // One probe is all the request needs, but `available` is documented as the
+    // live pool size — stopping at the first page would quietly make it a
+    // lower bound (1,200 reported as 500).
+    const { client, pages } = pagedClient(many(3320, 1200, 1));
+    const out = await resolveNodes(client, ["de-3320"], 1, 4, 50);
+    expect(out.available["de-3320"]).toBe(1200);
+    expect(pages).toEqual([1, 2, 3]);
+  });
+
+  it("plans batches from live counts so one page usually suffices", async () => {
+    // Without sizes both nodes are guessed at 50, land in one batch, and their
+    // real 900 probes overflow the page. With the live counts the planner puts
+    // them in separate lookups and each fits.
+    const probes = [...many(3320, 600, 1), ...many(3209, 300, 5000)];
+    const guessed = pagedClient(probes);
+    await resolveNodes(guessed.client, ["de-3320", "de-3209"], 1, 4, 50);
+    expect(guessed.pages.length).toBeGreaterThan(1);
+
+    const planned = pagedClient(probes);
+    const out = await resolveNodes(planned.client, ["de-3320", "de-3209"], 1, 4, 50, {
+      "de-3320": 600,
+      "de-3209": 300,
+    });
+    expect(out.available).toEqual({ "de-3320": 600, "de-3209": 300 });
+  });
+
+  it("stops on a short page rather than asking for one that cannot exist", async () => {
+    const { client, pages } = pagedClient(many(3320, 10, 1));
+    await resolveNodes(client, ["de-3320"], 3, 4, 50);
+    expect(pages).toEqual([1]);
+  });
+});
