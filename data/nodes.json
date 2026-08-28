@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-28T08:16:38.825Z",
+  "generatedAt": "2026-08-28T12:11:39.438Z",
   "policy": {
     "minProbes": 2,
     "perCountry": 2,
@@ -715,18 +715,6 @@
       "featured": true
     },
     {
-      "id": "ae-5384",
-      "cc": "AE",
-      "asn": 5384,
-      "asnV6": 8966,
-      "label": "阿联酋 · EMIRATES TELECOMMUNICATIO…",
-      "holder": "EMIRATES TELECOMMUNICATIO…",
-      "continent": "亚洲",
-      "probes": 2,
-      "probesV6": 2,
-      "featured": false
-    },
-    {
       "id": "af-38742",
       "cc": "AF",
       "asn": 38742,
@@ -811,6 +799,18 @@
       "featured": false
     },
     {
+      "id": "bh-51375",
+      "cc": "BH",
+      "asn": 51375,
+      "asnV6": null,
+      "label": "巴林 · VIVABH STC BAHRAIN B.S.C…",
+      "holder": "VIVABH STC BAHRAIN B.S.C…",
+      "continent": "亚洲",
+      "probes": 2,
+      "probesV6": 0,
+      "featured": false
+    },
+    {
       "id": "cn-37963",
       "cc": "CN",
       "asn": 37963,
@@ -830,8 +830,8 @@
       "label": "中国 · 电信",
       "holder": "CHINANET-BACKBONE",
       "continent": "亚洲",
-      "probes": 12,
-      "probesV6": 6,
+      "probes": 13,
+      "probesV6": 7,
       "featured": true
     },
     {
@@ -843,7 +843,7 @@
       "holder": "CHINA UNICOM China169 Bac…",
       "continent": "亚洲",
       "probes": 10,
-      "probesV6": 3,
+      "probesV6": 2,
       "featured": true
     },
     {
@@ -902,7 +902,7 @@
       "label": "中国 · 电信 AS4812",
       "holder": "China Telecom (Group)",
       "continent": "亚洲",
-      "probes": 2,
+      "probes": 3,
       "probesV6": 1,
       "featured": true
     },
@@ -938,7 +938,7 @@
       "label": "香港 · HKT",
       "holder": "HKT",
       "continent": "亚洲",
-      "probes": 3,
+      "probes": 4,
       "probesV6": 2,
       "featured": true
     },
@@ -991,15 +991,15 @@
       "featured": true
     },
     {
-      "id": "id-139994",
+      "id": "id-23700",
       "cc": "ID",
-      "asn": 139994,
-      "asnV6": 139994,
-      "label": "印尼 · PT XL Axiata Tbk",
-      "holder": "PT XL Axiata Tbk",
+      "asn": 23700,
+      "asnV6": null,
+      "label": "印尼 · Linknet-Fastnet ASN",
+      "holder": "Linknet-Fastnet ASN",
       "continent": "亚洲",
       "probes": 4,
-      "probesV6": 2,
+      "probesV6": 0,
       "featured": false
     },
     {
@@ -1010,20 +1010,20 @@
       "label": "以色列 · Partner Communications",
       "holder": "Partner Communications",
       "continent": "亚洲",
-      "probes": 9,
+      "probes": 10,
       "probesV6": 3,
       "featured": true
     },
     {
-      "id": "il-6810",
+      "id": "il-378",
       "cc": "IL",
-      "asn": 6810,
-      "asnV6": 6810,
-      "label": "以色列 · BEZEK \"Bezeq\"- THE ISRAEL…",
-      "holder": "BEZEK \"Bezeq\"- THE ISRAEL…",
+      "asn": 378,
+      "asnV6": 378,
+      "label": "以色列 · Israel InterUniversity Co…",
+      "holder": "Israel InterUniversity Co…",
       "continent": "亚洲",
-      "probes": 5,
-      "probesV6": 3,
+      "probes": 6,
+      "probesV6": 1,
       "featured": false
     },
     {
@@ -1034,7 +1034,7 @@
       "label": "印度 · Airtel",
       "holder": "Bharti Airtel",
       "continent": "亚洲",
-      "probes": 23,
+      "probes": 26,
       "probesV6": 11,
       "featured": true
     },
@@ -1058,8 +1058,8 @@
       "label": "印度 · National Internet Backbone",
       "holder": "National Internet Backbone",
       "continent": "亚洲",
-      "probes": 7,
-      "probesV6": 3,
+      "probes": 10,
+      "probesV6": 6,
       "featured": false
     },
     {
@@ -1075,6 +1075,18 @@
       "featured": false
     },
     {
+      "id": "ir-58224",
+      "cc": "IR",
+      "asn": 58224,
+      "asnV6": null,
+      "label": "伊朗 · TCI Iran Telecommunicatio…",
+      "holder": "TCI Iran Telecommunicatio…",
+      "continent": "亚洲",
+      "probes": 7,
+      "probesV6": 0,
+      "featured": false
+    },
+    {
       "id": "ir-59441",
       "cc": "IR",
       "asn": 59441,
@@ -1087,18 +1099,6 @@
       "featured": false
     },
     {
-      "id": "ir-39650",
-      "cc": "IR",
-      "asn": 39650,
-      "asnV6": 39650,
-      "label": "伊朗 · AtrinCommunication Atrin…",
-      "holder": "AtrinCommunication Atrin…",
-      "continent": "亚洲",
-      "probes": 3,
-      "probesV6": 1,
-      "featured": false
-    },
-    {
       "id": "jp-4713",
       "cc": "JP",
       "asn": 4713,
@@ -1106,8 +1106,8 @@
       "label": "日本 · NTT OCN",
       "holder": "NTT DOCOMO BUSINESS",
       "continent": "亚洲",
-      "probes": 17,
-      "probesV6": 12,
+      "probes": 21,
+      "probesV6": 16,
       "featured": true
     },
     {
@@ -1118,8 +1118,8 @@
       "label": "日本 · KDDI",
       "holder": "KDDI CORPORATION",
       "continent": "亚洲",
-      "probes": 16,
-      "probesV6": 12,
+      "probes": 19,
+      "probesV6": 14,
       "featured": true
     },
     {
@@ -1130,8 +1130,8 @@
       "label": "日本 · IIJ",
       "holder": "Internet Initiative Japan",
       "continent": "亚洲",
-      "probes": 8,
-      "probesV6": 8,
+      "probes": 9,
+      "probesV6": 9,
       "featured": false
     },
     {
@@ -1142,7 +1142,7 @@
       "label": "日本 · SoftBank",
       "holder": "SoftBank",
       "continent": "亚洲",
-      "probes": 7,
+      "probes": 8,
       "probesV6": 3,
       "featured": false
     },
@@ -1195,6 +1195,18 @@
       "featured": true
     },
     {
+      "id": "kr-17858",
+      "cc": "KR",
+      "asn": 17858,
+      "asnV6": null,
+      "label": "韩国 · LG POWERCOMM",
+      "holder": "LG POWERCOMM",
+      "continent": "亚洲",
+      "probes": 3,
+      "probesV6": 0,
+      "featured": false
+    },
+    {
       "id": "kr-209710",
       "cc": "KR",
       "asn": 209710,
@@ -1204,18 +1216,6 @@
       "continent": "亚洲",
       "probes": 2,
       "probesV6": 2,
-      "featured": false
-    },
-    {
-      "id": "kr-17858",
-      "cc": "KR",
-      "asn": 17858,
-      "asnV6": null,
-      "label": "韩国 · LG POWERCOMM",
-      "holder": "LG POWERCOMM",
-      "continent": "亚洲",
-      "probes": 2,
-      "probesV6": 0,
       "featured": false
     },
     {
@@ -1267,15 +1267,27 @@
       "featured": false
     },
     {
-      "id": "lk-18001",
+      "id": "lk-9329",
       "cc": "LK",
-      "asn": 18001,
-      "asnV6": null,
-      "label": "斯里兰卡 · Dialog Axiata",
-      "holder": "Dialog Axiata",
+      "asn": 9329,
+      "asnV6": 9329,
+      "label": "斯里兰卡 · Sri Lanka Telecom Internet",
+      "holder": "Sri Lanka Telecom Internet",
       "continent": "亚洲",
       "probes": 3,
-      "probesV6": 0,
+      "probesV6": 1,
+      "featured": false
+    },
+    {
+      "id": "mn-10219",
+      "cc": "MN",
+      "asn": 10219,
+      "asnV6": 10219,
+      "label": "蒙古 · Skymedia Corporation",
+      "holder": "Skymedia Corporation",
+      "continent": "亚洲",
+      "probes": 2,
+      "probesV6": 1,
       "featured": false
     },
     {
@@ -1286,7 +1298,7 @@
       "label": "马尔代夫 · DHIVEHI RAAJJEYGE GULHUN",
       "holder": "DHIVEHI RAAJJEYGE GULHUN",
       "continent": "亚洲",
-      "probes": 8,
+      "probes": 9,
       "probesV6": 1,
       "featured": false
     },
@@ -1298,8 +1310,8 @@
       "label": "马来西亚 · TM TECHNOLOGY SERVICES SD…",
       "holder": "TM TECHNOLOGY SERVICES SD…",
       "continent": "亚洲",
-      "probes": 10,
-      "probesV6": 8,
+      "probes": 13,
+      "probesV6": 9,
       "featured": true
     },
     {
@@ -1310,7 +1322,7 @@
       "label": "马来西亚 · TIME dotCom Berhad No. 14",
       "holder": "TIME dotCom Berhad No. 14",
       "continent": "亚洲",
-      "probes": 4,
+      "probes": 5,
       "probesV6": 2,
       "featured": false
     },
@@ -1334,8 +1346,8 @@
       "label": "菲律宾 · Philippine Long Distance…",
       "holder": "Philippine Long Distance…",
       "continent": "亚洲",
-      "probes": 9,
-      "probesV6": 1,
+      "probes": 10,
+      "probesV6": 3,
       "featured": true
     },
     {
@@ -1351,18 +1363,6 @@
       "featured": false
     },
     {
-      "id": "pk-17557",
-      "cc": "PK",
-      "asn": 17557,
-      "asnV6": null,
-      "label": "巴基斯坦 · Pakistan Telecommunicatio…",
-      "holder": "Pakistan Telecommunicatio…",
-      "continent": "亚洲",
-      "probes": 5,
-      "probesV6": 0,
-      "featured": true
-    },
-    {
       "id": "pk-23674",
       "cc": "PK",
       "asn": 23674,
@@ -1372,6 +1372,18 @@
       "continent": "亚洲",
       "probes": 3,
       "probesV6": 3,
+      "featured": true
+    },
+    {
+      "id": "pk-9541",
+      "cc": "PK",
+      "asn": 9541,
+      "asnV6": 9541,
+      "label": "巴基斯坦 · Cyber Internet Services…",
+      "holder": "Cyber Internet Services…",
+      "continent": "亚洲",
+      "probes": 3,
+      "probesV6": 2,
       "featured": false
     },
     {
@@ -1411,15 +1423,15 @@
       "featured": false
     },
     {
-      "id": "sg-4773",
+      "id": "sg-18106",
       "cc": "SG",
-      "asn": 4773,
-      "asnV6": 4773,
-      "label": "新加坡 · MobileOne Ltd. Mobile/Int…",
-      "holder": "MobileOne Ltd. Mobile/Int…",
+      "asn": 18106,
+      "asnV6": 18106,
+      "label": "新加坡 · Viewqwest Pte",
+      "holder": "Viewqwest Pte",
       "continent": "亚洲",
-      "probes": 9,
-      "probesV6": 3,
+      "probes": 11,
+      "probesV6": 5,
       "featured": false
     },
     {
@@ -1526,8 +1538,8 @@
       "label": "土耳其 · TTNet Turk Telekomunikasy…",
       "holder": "TTNet Turk Telekomunikasy…",
       "continent": "亚洲",
-      "probes": 7,
-      "probesV6": 4,
+      "probes": 12,
+      "probesV6": 5,
       "featured": true
     },
     {
@@ -1538,7 +1550,7 @@
       "label": "土耳其 · Superonline Iletisim Hizm…",
       "holder": "Superonline Iletisim Hizm…",
       "continent": "亚洲",
-      "probes": 6,
+      "probes": 8,
       "probesV6": 1,
       "featured": false
     },
@@ -1594,12 +1606,12 @@
       "id": "uz-8193",
       "cc": "UZ",
       "asn": 8193,
-      "asnV6": 202660,
+      "asnV6": 8193,
       "label": "乌兹别克斯坦 · BRM-AS \"Uzbektelekom\" Joi…",
       "holder": "BRM-AS \"Uzbektelekom\" Joi…",
       "continent": "亚洲",
-      "probes": 3,
-      "probesV6": 2,
+      "probes": 4,
+      "probesV6": 3,
       "featured": false
     },
     {
@@ -1646,7 +1658,7 @@
       "label": "加拿大 · Bell Canada",
       "holder": "Bell Canada",
       "continent": "北美",
-      "probes": 35,
+      "probes": 39,
       "probesV6": 3,
       "featured": true
     },
@@ -1658,20 +1670,20 @@
       "label": "加拿大 · TELUS Communications",
       "holder": "TELUS Communications",
       "continent": "北美",
-      "probes": 28,
-      "probesV6": 17,
+      "probes": 34,
+      "probesV6": 20,
       "featured": false
     },
     {
-      "id": "ca-1403",
+      "id": "ca-5645",
       "cc": "CA",
-      "asn": 1403,
-      "asnV6": 1403,
-      "label": "加拿大 · EBOX",
-      "holder": "EBOX",
+      "asn": 5645,
+      "asnV6": 5645,
+      "label": "加拿大 · TekSavvy Solutions",
+      "holder": "TekSavvy Solutions",
       "continent": "北美",
-      "probes": 16,
-      "probesV6": 11,
+      "probes": 17,
+      "probesV6": 5,
       "featured": false
     },
     {
@@ -1706,8 +1718,8 @@
       "label": "多米尼加 · Compania Dominicana de Te…",
       "holder": "Compania Dominicana de Te…",
       "continent": "北美",
-      "probes": 5,
-      "probesV6": 4,
+      "probes": 6,
+      "probesV6": 5,
       "featured": false
     },
     {
@@ -1778,8 +1790,8 @@
       "label": "墨西哥 · UNINET",
       "holder": "UNINET",
       "continent": "北美",
-      "probes": 19,
-      "probesV6": 10,
+      "probes": 20,
+      "probesV6": 11,
       "featured": true
     },
     {
@@ -1874,8 +1886,8 @@
       "label": "美国 · Comcast",
       "holder": "Comcast Cable Communicati…",
       "continent": "北美",
-      "probes": 215,
-      "probesV6": 119,
+      "probes": 233,
+      "probesV6": 129,
       "featured": true
     },
     {
@@ -1886,8 +1898,8 @@
       "label": "美国 · AT&T",
       "holder": "AT&T Enterprises",
       "continent": "北美",
-      "probes": 149,
-      "probesV6": 75,
+      "probes": 168,
+      "probesV6": 86,
       "featured": true
     },
     {
@@ -1898,8 +1910,8 @@
       "label": "美国 · Verizon",
       "holder": "Verizon Business",
       "continent": "北美",
-      "probes": 121,
-      "probesV6": 55,
+      "probes": 139,
+      "probesV6": 60,
       "featured": false
     },
     {
@@ -1910,8 +1922,8 @@
       "label": "美国 · Charter",
       "holder": "Charter Communications",
       "continent": "北美",
-      "probes": 26,
-      "probesV6": 7,
+      "probes": 29,
+      "probesV6": 8,
       "featured": false
     },
     {
@@ -1934,7 +1946,7 @@
       "label": "阿根廷 · Telecom Argentina",
       "holder": "Telecom Argentina",
       "continent": "南美",
-      "probes": 5,
+      "probes": 6,
       "probesV6": 1,
       "featured": true
     },
@@ -1975,18 +1987,6 @@
       "featured": false
     },
     {
-      "id": "br-26599",
-      "cc": "BR",
-      "asn": 26599,
-      "asnV6": 18881,
-      "label": "巴西 · TELEFONICA BRASIL S.A",
-      "holder": "TELEFONICA BRASIL S.A",
-      "continent": "南美",
-      "probes": 8,
-      "probesV6": 3,
-      "featured": false
-    },
-    {
       "id": "br-28573",
       "cc": "BR",
       "asn": 28573,
@@ -2011,6 +2011,18 @@
       "featured": false
     },
     {
+      "id": "br-8167",
+      "cc": "BR",
+      "asn": 8167,
+      "asnV6": 8167,
+      "label": "巴西 · Brasil Telecom",
+      "holder": "V tal",
+      "continent": "南美",
+      "probes": 2,
+      "probesV6": 2,
+      "featured": false
+    },
+    {
       "id": "cl-7418",
       "cc": "CL",
       "asn": 7418,
@@ -2018,7 +2030,7 @@
       "label": "智利 · TELEFONICA CHILE",
       "holder": "TELEFONICA CHILE",
       "continent": "南美",
-      "probes": 19,
+      "probes": 20,
       "probesV6": 1,
       "featured": false
     },
@@ -2155,18 +2167,6 @@
       "featured": false
     },
     {
-      "id": "ve-269730",
-      "cc": "VE",
-      "asn": 269730,
-      "asnV6": 269730,
-      "label": "委内瑞拉 · TECNOVEN SERVICES CA",
-      "holder": "TECNOVEN SERVICES CA",
-      "continent": "南美",
-      "probes": 4,
-      "probesV6": 3,
-      "featured": false
-    },
-    {
       "id": "ve-21826",
       "cc": "VE",
       "asn": 21826,
@@ -2174,8 +2174,20 @@
       "label": "委内瑞拉 · Corporacion Telemic C.A.",
       "holder": "Corporacion Telemic C.A.",
       "continent": "南美",
-      "probes": 4,
+      "probes": 5,
       "probesV6": 3,
+      "featured": false
+    },
+    {
+      "id": "ve-61461",
+      "cc": "VE",
+      "asn": 61461,
+      "asnV6": 61461,
+      "label": "委内瑞拉 · Airtek Solutions C.A.",
+      "holder": "Airtek Solutions C.A.",
+      "continent": "南美",
+      "probes": 5,
+      "probesV6": 2,
       "featured": false
     },
     {
@@ -2198,7 +2210,7 @@
       "label": "澳大利亚 · TPG",
       "holder": "TPG Telecom",
       "continent": "大洋洲",
-      "probes": 8,
+      "probes": 10,
       "probesV6": 1,
       "featured": false
     },
@@ -2210,7 +2222,7 @@
       "label": "澳大利亚 · Optus",
       "holder": "Microplex PTY",
       "continent": "大洋洲",
-      "probes": 6,
+      "probes": 7,
       "probesV6": 0,
       "featured": false
     },
@@ -2294,8 +2306,8 @@
       "label": "新西兰 · Voyager Internet",
       "holder": "Voyager Internet",
       "continent": "大洋洲",
-      "probes": 12,
-      "probesV6": 7,
+      "probes": 13,
+      "probesV6": 8,
       "featured": false
     },
     {
@@ -2335,24 +2347,24 @@
       "featured": false
     },
     {
-      "id": "al-8661",
-      "cc": "AL",
-      "asn": 8661,
-      "asnV6": null,
-      "label": "阿尔巴尼亚 · PTK Telekomi i Kosoves SH…",
-      "holder": "PTK Telekomi i Kosoves SH…",
-      "continent": "欧洲",
-      "probes": 3,
-      "probesV6": 0,
-      "featured": false
-    },
-    {
       "id": "al-42313",
       "cc": "AL",
       "asn": 42313,
       "asnV6": null,
       "label": "阿尔巴尼亚 · ONE ALBANIA SH.A.",
       "holder": "ONE ALBANIA SH.A.",
+      "continent": "欧洲",
+      "probes": 5,
+      "probesV6": 0,
+      "featured": false
+    },
+    {
+      "id": "al-8661",
+      "cc": "AL",
+      "asn": 8661,
+      "asnV6": null,
+      "label": "阿尔巴尼亚 · PTK Telekomi i Kosoves SH…",
+      "holder": "PTK Telekomi i Kosoves SH…",
       "continent": "欧洲",
       "probes": 3,
       "probesV6": 0,
@@ -2366,7 +2378,7 @@
       "label": "奥地利 · TMA T-Mobile Austria",
       "holder": "TMA T-Mobile Austria",
       "continent": "欧洲",
-      "probes": 25,
+      "probes": 28,
       "probesV6": 9,
       "featured": true
     },
@@ -2378,7 +2390,7 @@
       "label": "奥地利 · A1 Telekom Austria",
       "holder": "A1 Telekom Austria",
       "continent": "欧洲",
-      "probes": 23,
+      "probes": 24,
       "probesV6": 11,
       "featured": false
     },
@@ -2402,21 +2414,9 @@
       "label": "波黑 · BA-TELEMACH-AS Telemach B…",
       "holder": "BA-TELEMACH-AS Telemach B…",
       "continent": "欧洲",
-      "probes": 3,
+      "probes": 4,
       "probesV6": 0,
       "featured": false
-    },
-    {
-      "id": "be-6848",
-      "cc": "BE",
-      "asn": 6848,
-      "asnV6": 6848,
-      "label": "比利时 · Telenet",
-      "holder": "Telenet",
-      "continent": "欧洲",
-      "probes": 38,
-      "probesV6": 27,
-      "featured": true
     },
     {
       "id": "be-5432",
@@ -2426,8 +2426,20 @@
       "label": "比利时 · Proximus NV",
       "holder": "Proximus NV",
       "continent": "欧洲",
-      "probes": 35,
-      "probesV6": 28,
+      "probes": 40,
+      "probesV6": 32,
+      "featured": true
+    },
+    {
+      "id": "be-6848",
+      "cc": "BE",
+      "asn": 6848,
+      "asnV6": 6848,
+      "label": "比利时 · Telenet",
+      "holder": "Telenet",
+      "continent": "欧洲",
+      "probes": 39,
+      "probesV6": 29,
       "featured": false
     },
     {
@@ -2443,15 +2455,15 @@
       "featured": false
     },
     {
-      "id": "bg-203380",
+      "id": "bg-3245",
       "cc": "BG",
-      "asn": 203380,
-      "asnV6": 203380,
-      "label": "保加利亚 · DAInternationalGroup DA I…",
-      "holder": "DAInternationalGroup DA I…",
+      "asn": 3245,
+      "asnV6": 3245,
+      "label": "保加利亚 · Digital Systems",
+      "holder": "Digital Systems",
       "continent": "欧洲",
-      "probes": 4,
-      "probesV6": 4,
+      "probes": 5,
+      "probesV6": 1,
       "featured": false
     },
     {
@@ -2486,8 +2498,8 @@
       "label": "瑞士 · INIT7 (Switzerland)",
       "holder": "INIT7 (Switzerland)",
       "continent": "欧洲",
-      "probes": 67,
-      "probesV6": 43,
+      "probes": 75,
+      "probesV6": 49,
       "featured": true
     },
     {
@@ -2498,8 +2510,8 @@
       "label": "瑞士 · SWISSCOM (Schweiz)",
       "holder": "SWISSCOM (Schweiz)",
       "continent": "欧洲",
-      "probes": 38,
-      "probesV6": 23,
+      "probes": 47,
+      "probesV6": 32,
       "featured": false
     },
     {
@@ -2534,8 +2546,8 @@
       "label": "捷克 · Vodafone Czech Republic a…",
       "holder": "Vodafone Czech Republic a…",
       "continent": "欧洲",
-      "probes": 36,
-      "probesV6": 16,
+      "probes": 37,
+      "probesV6": 17,
       "featured": true
     },
     {
@@ -2546,7 +2558,7 @@
       "label": "捷克 · O2-CZECH-REPUBLIC O2 Czec…",
       "holder": "O2-CZECH-REPUBLIC O2 Czec…",
       "continent": "欧洲",
-      "probes": 25,
+      "probes": 28,
       "probesV6": 8,
       "featured": false
     },
@@ -2558,8 +2570,8 @@
       "label": "德国 · Deutsche Telekom",
       "holder": "DTAG Deutsche Telekom",
       "continent": "欧洲",
-      "probes": 310,
-      "probesV6": 214,
+      "probes": 367,
+      "probesV6": 260,
       "featured": true
     },
     {
@@ -2570,8 +2582,8 @@
       "label": "德国 · 1&1",
       "holder": "VERSATEL 1&1 Versatel",
       "continent": "欧洲",
-      "probes": 79,
-      "probesV6": 58,
+      "probes": 89,
+      "probesV6": 65,
       "featured": false
     },
     {
@@ -2582,8 +2594,8 @@
       "label": "德国 · Telefónica DE",
       "holder": "Telefonica Germany GmbH &…",
       "continent": "欧洲",
-      "probes": 40,
-      "probesV6": 30,
+      "probes": 46,
+      "probesV6": 34,
       "featured": false
     },
     {
@@ -2594,7 +2606,7 @@
       "label": "丹麦 · TDC Holding A/S",
       "holder": "TDC Holding A/S",
       "continent": "欧洲",
-      "probes": 19,
+      "probes": 24,
       "probesV6": 13,
       "featured": true
     },
@@ -2606,7 +2618,7 @@
       "label": "丹麦 · Sinal-AS Sinal A/S",
       "holder": "Sinal-AS Sinal A/S",
       "continent": "欧洲",
-      "probes": 13,
+      "probes": 14,
       "probesV6": 10,
       "featured": false
     },
@@ -2642,8 +2654,8 @@
       "label": "西班牙 · Telefonica_de_EspaNa TELE…",
       "holder": "Telefonica_de_EspaNa TELE…",
       "continent": "欧洲",
-      "probes": 67,
-      "probesV6": 9,
+      "probes": 74,
+      "probesV6": 11,
       "featured": true
     },
     {
@@ -2654,8 +2666,8 @@
       "label": "西班牙 · DIGI SPAIN TELECOM S.A",
       "holder": "DIGI SPAIN TELECOM S.A",
       "continent": "欧洲",
-      "probes": 30,
-      "probesV6": 12,
+      "probes": 36,
+      "probesV6": 18,
       "featured": false
     },
     {
@@ -2666,20 +2678,20 @@
       "label": "芬兰 · Elisa Oyj",
       "holder": "Elisa Oyj",
       "continent": "欧洲",
-      "probes": 23,
-      "probesV6": 4,
+      "probes": 25,
+      "probesV6": 5,
       "featured": true
     },
     {
-      "id": "fi-1759",
+      "id": "fi-16086",
       "cc": "FI",
-      "asn": 1759,
-      "asnV6": 1759,
-      "label": "芬兰 · TSF-IP-Core Telia Finland…",
-      "holder": "TSF-IP-Core Telia Finland…",
+      "asn": 16086,
+      "asnV6": 16086,
+      "label": "芬兰 · DNA Oyj",
+      "holder": "DNA Oyj",
       "continent": "欧洲",
-      "probes": 15,
-      "probesV6": 5,
+      "probes": 20,
+      "probesV6": 13,
       "featured": false
     },
     {
@@ -2690,8 +2702,8 @@
       "label": "法国 · Free",
       "holder": "PROXAD Free",
       "continent": "欧洲",
-      "probes": 271,
-      "probesV6": 211,
+      "probes": 313,
+      "probesV6": 238,
       "featured": true
     },
     {
@@ -2702,8 +2714,8 @@
       "label": "法国 · Orange",
       "holder": "Orange",
       "continent": "欧洲",
-      "probes": 173,
-      "probesV6": 123,
+      "probes": 201,
+      "probesV6": 145,
       "featured": false
     },
     {
@@ -2714,8 +2726,8 @@
       "label": "法国 · Bouygues",
       "holder": "Bouygues Telecom",
       "continent": "欧洲",
-      "probes": 66,
-      "probesV6": 50,
+      "probes": 75,
+      "probesV6": 55,
       "featured": false
     },
     {
@@ -2726,7 +2738,7 @@
       "label": "英国 · Andrews & Arnold",
       "holder": "Andrews & Arnold",
       "continent": "欧洲",
-      "probes": 48,
+      "probes": 51,
       "probesV6": 41,
       "featured": false
     },
@@ -2738,8 +2750,8 @@
       "label": "英国 · Virgin Media",
       "holder": "NTL Virgin Media",
       "continent": "欧洲",
-      "probes": 41,
-      "probesV6": 5,
+      "probes": 43,
+      "probesV6": 4,
       "featured": true
     },
     {
@@ -2750,8 +2762,8 @@
       "label": "英国 · BT",
       "holder": "BT-UK-AS British Telecomm…",
       "continent": "欧洲",
-      "probes": 37,
-      "probesV6": 19,
+      "probes": 40,
+      "probesV6": 20,
       "featured": false
     },
     {
@@ -2762,20 +2774,32 @@
       "label": "希腊 · Ote SA…",
       "holder": "Ote SA…",
       "continent": "欧洲",
-      "probes": 19,
-      "probesV6": 14,
+      "probes": 23,
+      "probesV6": 16,
       "featured": false
     },
     {
-      "id": "gr-3329",
+      "id": "gr-200736",
       "cc": "GR",
-      "asn": 3329,
-      "asnV6": 3329,
-      "label": "希腊 · HOL-GR Vodafone-panafon H…",
-      "holder": "HOL-GR Vodafone-panafon H…",
+      "asn": 200736,
+      "asnV6": 200736,
+      "label": "希腊 · INALAN MEDIANET INVEST AE",
+      "holder": "INALAN MEDIANET INVEST AE",
       "continent": "欧洲",
-      "probes": 9,
-      "probesV6": 6,
+      "probes": 10,
+      "probesV6": 5,
+      "featured": false
+    },
+    {
+      "id": "hr-205714",
+      "cc": "HR",
+      "asn": 205714,
+      "asnV6": null,
+      "label": "克罗地亚 · tele2hr Telemach Hrvatska…",
+      "holder": "tele2hr Telemach Hrvatska…",
+      "continent": "欧洲",
+      "probes": 7,
+      "probesV6": 0,
       "featured": false
     },
     {
@@ -2791,15 +2815,15 @@
       "featured": false
     },
     {
-      "id": "hr-5391",
-      "cc": "HR",
-      "asn": 5391,
-      "asnV6": 5391,
-      "label": "克罗地亚 · T-HT Hrvatski Telekom d.d.",
-      "holder": "T-HT Hrvatski Telekom d.d.",
+      "id": "hu-5483",
+      "cc": "HU",
+      "asn": 5483,
+      "asnV6": 5483,
+      "label": "匈牙利 · Magyar Telekom",
+      "holder": "Magyar Telekom",
       "continent": "欧洲",
-      "probes": 6,
-      "probesV6": 1,
+      "probes": 19,
+      "probesV6": 11,
       "featured": false
     },
     {
@@ -2810,20 +2834,8 @@
       "label": "匈牙利 · DIGICABLE DIGI Tavkozlesi…",
       "holder": "DIGICABLE DIGI Tavkozlesi…",
       "continent": "欧洲",
-      "probes": 14,
-      "probesV6": 5,
-      "featured": false
-    },
-    {
-      "id": "hu-5483",
-      "cc": "HU",
-      "asn": 5483,
-      "asnV6": 5483,
-      "label": "匈牙利 · Magyar Telekom",
-      "holder": "Magyar Telekom",
-      "continent": "欧洲",
-      "probes": 14,
-      "probesV6": 8,
+      "probes": 16,
+      "probesV6": 6,
       "featured": false
     },
     {
@@ -2834,7 +2846,7 @@
       "label": "爱尔兰 · LibertyGlobal Liberty Glo…",
       "holder": "LibertyGlobal Liberty Glo…",
       "continent": "欧洲",
-      "probes": 17,
+      "probes": 20,
       "probesV6": 5,
       "featured": true
     },
@@ -2846,8 +2858,8 @@
       "label": "爱尔兰 · EIRCOM",
       "holder": "EIRCOM",
       "continent": "欧洲",
-      "probes": 12,
-      "probesV6": 7,
+      "probes": 13,
+      "probesV6": 8,
       "featured": false
     },
     {
@@ -2863,6 +2875,18 @@
       "featured": false
     },
     {
+      "id": "is-44735",
+      "cc": "IS",
+      "asn": 44735,
+      "asnV6": null,
+      "label": "冰岛 · SIP-ASN Nova hf",
+      "holder": "SIP-ASN Nova hf",
+      "continent": "欧洲",
+      "probes": 2,
+      "probesV6": 0,
+      "featured": false
+    },
+    {
       "id": "it-3269",
       "cc": "IT",
       "asn": 3269,
@@ -2870,7 +2894,7 @@
       "label": "意大利 · Telecom Italia S.p.A.",
       "holder": "Telecom Italia S.p.A.",
       "continent": "欧洲",
-      "probes": 35,
+      "probes": 42,
       "probesV6": 1,
       "featured": true
     },
@@ -2882,7 +2906,7 @@
       "label": "意大利 · FASTWEB SpA",
       "holder": "FASTWEB SpA",
       "continent": "欧洲",
-      "probes": 27,
+      "probes": 29,
       "probesV6": 12,
       "featured": false
     },
@@ -2899,12 +2923,12 @@
       "featured": false
     },
     {
-      "id": "lt-13194",
+      "id": "lt-16125",
       "cc": "LT",
-      "asn": 13194,
-      "asnV6": 13194,
-      "label": "立陶宛 · BITE UAB \"Bite Lietuva\"",
-      "holder": "BITE UAB \"Bite Lietuva\"",
+      "asn": 16125,
+      "asnV6": 16125,
+      "label": "立陶宛 · UAB \"Cherry Servers\"",
+      "holder": "UAB \"Cherry Servers\"",
       "continent": "欧洲",
       "probes": 3,
       "probesV6": 1,
@@ -2918,8 +2942,8 @@
       "label": "卢森堡 · EPT-LU POST Luxembourg",
       "holder": "EPT-LU POST Luxembourg",
       "continent": "欧洲",
-      "probes": 10,
-      "probesV6": 9,
+      "probes": 11,
+      "probesV6": 10,
       "featured": false
     },
     {
@@ -2942,7 +2966,7 @@
       "label": "拉脱维亚 · SIA Tet",
       "holder": "SIA Tet",
       "continent": "欧洲",
-      "probes": 5,
+      "probes": 6,
       "probesV6": 1,
       "featured": false
     },
@@ -2950,12 +2974,12 @@
       "id": "lv-24921",
       "cc": "LV",
       "asn": 24921,
-      "asnV6": 12847,
+      "asnV6": 24921,
       "label": "拉脱维亚 · LMT-3G Latvijas Mobilais…",
       "holder": "LMT-3G Latvijas Mobilais…",
       "continent": "欧洲",
-      "probes": 5,
-      "probesV6": 3,
+      "probes": 6,
+      "probesV6": 4,
       "featured": false
     },
     {
@@ -2995,6 +3019,18 @@
       "featured": false
     },
     {
+      "id": "mt-12709",
+      "cc": "MT",
+      "asn": 12709,
+      "asnV6": null,
+      "label": "马耳他 · MELITACABLE Melita",
+      "holder": "MELITACABLE Melita",
+      "continent": "欧洲",
+      "probes": 4,
+      "probesV6": 0,
+      "featured": false
+    },
+    {
       "id": "mt-51840",
       "cc": "MT",
       "asn": 51840,
@@ -3007,18 +3043,6 @@
       "featured": false
     },
     {
-      "id": "mt-12709",
-      "cc": "MT",
-      "asn": 12709,
-      "asnV6": null,
-      "label": "马耳他 · MELITACABLE Melita",
-      "holder": "MELITACABLE Melita",
-      "continent": "欧洲",
-      "probes": 3,
-      "probesV6": 0,
-      "featured": false
-    },
-    {
       "id": "nl-1136",
       "cc": "NL",
       "asn": 1136,
@@ -3026,8 +3050,8 @@
       "label": "荷兰 · KPN",
       "holder": "KPN",
       "continent": "欧洲",
-      "probes": 129,
-      "probesV6": 89,
+      "probes": 140,
+      "probesV6": 96,
       "featured": true
     },
     {
@@ -3038,8 +3062,8 @@
       "label": "荷兰 · FREEDOMINTERNET Freedom I…",
       "holder": "FREEDOMINTERNET Freedom I…",
       "continent": "欧洲",
-      "probes": 73,
-      "probesV6": 63,
+      "probes": 82,
+      "probesV6": 70,
       "featured": false
     },
     {
@@ -3050,7 +3074,7 @@
       "label": "荷兰 · Odido Netherlands",
       "holder": "Odido Netherlands",
       "continent": "欧洲",
-      "probes": 61,
+      "probes": 64,
       "probesV6": 4,
       "featured": false
     },
@@ -3062,8 +3086,8 @@
       "label": "挪威 · Altibox_AS Lyse Tele",
       "holder": "Altibox_AS Lyse Tele",
       "continent": "欧洲",
-      "probes": 23,
-      "probesV6": 15,
+      "probes": 26,
+      "probesV6": 16,
       "featured": true
     },
     {
@@ -3074,7 +3098,7 @@
       "label": "挪威 · Telenor Norge",
       "holder": "Telenor Norge",
       "continent": "欧洲",
-      "probes": 12,
+      "probes": 13,
       "probesV6": 6,
       "featured": false
     },
@@ -3086,7 +3110,7 @@
       "label": "波兰 · TPNET Orange Polska Spolk…",
       "holder": "TPNET Orange Polska Spolk…",
       "continent": "欧洲",
-      "probes": 26,
+      "probes": 29,
       "probesV6": 5,
       "featured": true
     },
@@ -3098,7 +3122,7 @@
       "label": "波兰 · P4 Sp. z o.o.",
       "holder": "P4 Sp. z o.o.",
       "continent": "欧洲",
-      "probes": 15,
+      "probes": 16,
       "probesV6": 1,
       "featured": false
     },
@@ -3110,8 +3134,8 @@
       "label": "葡萄牙 · NOS_COMUNICACOES NOS COMU…",
       "holder": "NOS_COMUNICACOES NOS COMU…",
       "continent": "欧洲",
-      "probes": 30,
-      "probesV6": 19,
+      "probes": 32,
+      "probesV6": 21,
       "featured": true
     },
     {
@@ -3122,8 +3146,8 @@
       "label": "葡萄牙 · SERVICOS DE COMUNICACOES…",
       "holder": "SERVICOS DE COMUNICACOES…",
       "continent": "欧洲",
-      "probes": 26,
-      "probesV6": 21,
+      "probes": 30,
+      "probesV6": 22,
       "featured": false
     },
     {
@@ -3134,19 +3158,19 @@
       "label": "罗马尼亚 · DIGI ROMANIA",
       "holder": "DIGI ROMANIA",
       "continent": "欧洲",
-      "probes": 27,
-      "probesV6": 13,
+      "probes": 30,
+      "probesV6": 14,
       "featured": true
     },
     {
-      "id": "ro-12302",
+      "id": "ro-2614",
       "cc": "RO",
-      "asn": 12302,
-      "asnV6": 12302,
-      "label": "罗马尼亚 · Vodafone_Ro Vodafone Roma…",
-      "holder": "Vodafone_Ro Vodafone Roma…",
+      "asn": 2614,
+      "asnV6": 2614,
+      "label": "罗马尼亚 · RoEduNet Agentia de Admin…",
+      "holder": "RoEduNet Agentia de Admin…",
       "continent": "欧洲",
-      "probes": 4,
+      "probes": 5,
       "probesV6": 1,
       "featured": false
     },
@@ -3158,7 +3182,7 @@
       "label": "塞尔维亚 · TELEKOM SRBIJA a.d.",
       "holder": "TELEKOM SRBIJA a.d.",
       "continent": "欧洲",
-      "probes": 12,
+      "probes": 13,
       "probesV6": 5,
       "featured": false
     },
@@ -3182,8 +3206,8 @@
       "label": "俄罗斯 · PJSC Rostelecom",
       "holder": "PJSC Rostelecom",
       "continent": "欧洲",
-      "probes": 26,
-      "probesV6": 4,
+      "probes": 27,
+      "probesV6": 5,
       "featured": true
     },
     {
@@ -3218,8 +3242,8 @@
       "label": "瑞典 · BAHNHOF",
       "holder": "BAHNHOF",
       "continent": "欧洲",
-      "probes": 42,
-      "probesV6": 15,
+      "probes": 44,
+      "probesV6": 17,
       "featured": true
     },
     {
@@ -3230,8 +3254,8 @@
       "label": "瑞典 · Telia Company",
       "holder": "Telia Company",
       "continent": "欧洲",
-      "probes": 30,
-      "probesV6": 10,
+      "probes": 32,
+      "probesV6": 12,
       "featured": false
     },
     {
@@ -3242,8 +3266,8 @@
       "label": "斯洛文尼亚 · T-2-AS T-2",
       "holder": "T-2-AS T-2",
       "continent": "欧洲",
-      "probes": 9,
-      "probesV6": 4,
+      "probes": 10,
+      "probesV6": 5,
       "featured": false
     },
     {
@@ -3266,20 +3290,20 @@
       "label": "斯洛伐克 · OSK-DNI Orange Slovensko…",
       "holder": "OSK-DNI Orange Slovensko…",
       "continent": "欧洲",
-      "probes": 7,
-      "probesV6": 4,
+      "probes": 10,
+      "probesV6": 5,
       "featured": false
     },
     {
-      "id": "sk-35328",
+      "id": "sk-6855",
       "cc": "SK",
-      "asn": 35328,
-      "asnV6": null,
-      "label": "斯洛伐克 · DSIDATA DSI DATA",
-      "holder": "DSIDATA DSI DATA",
+      "asn": 6855,
+      "asnV6": 6855,
+      "label": "斯洛伐克 · SK-TELEKOM Slovak Telekom",
+      "holder": "SK-TELEKOM Slovak Telekom",
       "continent": "欧洲",
-      "probes": 7,
-      "probesV6": 0,
+      "probes": 9,
+      "probesV6": 1,
       "featured": false
     },
     {
@@ -3290,7 +3314,7 @@
       "label": "乌克兰 · TRIOLAN CONTENT DELIVERY…",
       "holder": "TRIOLAN CONTENT DELIVERY…",
       "continent": "欧洲",
-      "probes": 7,
+      "probes": 8,
       "probesV6": 1,
       "featured": true
     },
@@ -3446,7 +3470,7 @@
       "label": "毛里求斯 · Mauritius Telecom",
       "holder": "Mauritius Telecom",
       "continent": "非洲",
-      "probes": 3,
+      "probes": 4,
       "probesV6": 0,
       "featured": false
     },
@@ -3506,7 +3530,7 @@
       "label": "留尼汪 · Reunicable",
       "holder": "Reunicable",
       "continent": "非洲",
-      "probes": 29,
+      "probes": 30,
       "probesV6": 2,
       "featured": false
     },
@@ -3547,12 +3571,12 @@
       "featured": false
     },
     {
-      "id": "tn-327934",
+      "id": "tn-37705",
       "cc": "TN",
-      "asn": 327934,
+      "asn": 37705,
       "asnV6": null,
-      "label": "突尼斯 · SOCIETE NATIONALE DES TEL…",
-      "holder": "SOCIETE NATIONALE DES TEL…",
+      "label": "突尼斯 · TOPNET",
+      "holder": "TOPNET",
       "continent": "非洲",
       "probes": 2,
       "probesV6": 0,
@@ -3602,8 +3626,8 @@
       "label": "南非 · AFRIHOST SP (PTY)",
       "holder": "AFRIHOST SP (PTY)",
       "continent": "非洲",
-      "probes": 7,
-      "probesV6": 2,
+      "probes": 8,
+      "probesV6": 3,
       "featured": false
     },
     {

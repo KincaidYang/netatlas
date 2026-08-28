@@ -243,7 +243,9 @@ async function json(url) {
 async function fetchConnectedProbes() {
   const out = [];
   let url =
-    `${ATLAS}/probes/?status=1&is_public=true&page_size=500` +
+    // No `is_public` filter — the runtime sweep and `findProbes` both see
+    // private probes, and 1,099 of Atlas's connected probes are private.
+    `${ATLAS}/probes/?status=1&page_size=500` +
     `&fields=id,country_code,asn_v4,asn_v6,status`;
   let page = 0;
   while (url) {
@@ -288,7 +290,9 @@ const main = async () => {
     // v6 ASN invented groups that resolve to nothing and inflated the IPv4
     // count of any node that happens to share the number.
     const asn = p.asn_v4;
-    if (!cc || !asn) continue;
+    // `?` is Atlas's placeholder for a probe it could not place; a `?-29802`
+    // node id fails `parseNodeId()`, which takes two-letter codes only.
+    if (!cc || cc === "?" || !asn) continue;
     const id = `${cc.toLowerCase()}-${asn}`;
     let g = groups.get(id);
     if (!g) {
