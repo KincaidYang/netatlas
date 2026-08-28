@@ -48,6 +48,12 @@ export interface CatalogSnapshot {
   /** Search responses only: how many pairs were looked through, and matched. */
   searched?: number;
   matched?: number;
+  /**
+   * What Atlas actually holds right now, as opposed to the ~240 pairs this
+   * catalogue curates out of it. The console shows these because the gap is
+   * the point: a node picker of 240 chips sits on top of five thousand.
+   */
+  totals?: { probes: number; groups: number; countries: number };
 }
 
 const CLOUD = new Set(POLICY.cloud);
@@ -66,10 +72,43 @@ const rank = (asn: number): number => (CLOUD.has(asn) ? 2 : OPERATOR_NAMES[asn] 
 export class CatalogCache implements DurableObject {
   private refreshing: Promise<void> | null = null;
 
+  /**
+   * Retry sooner than the TTL when a sweep fails. Atlas being briefly
+   * unreachable should not mean three hours of stale catalogue.
+   */
+  private static readonly RETRY_MS = 10 * 60 * 1000;
+
   constructor(
     private readonly state: DurableObjectState,
     private readonly env: unknown,
   ) {}
+
+  /**
+   * Sweep on a schedule, not only when someone happens to visit.
+   *
+   * The lazy trigger below is kept as a fallback, but on its own it puts the
+   * cost on the wrong person: a visitor arriving after the TTL expires starts
+   * the sweep, does not wait for it, and is the one person served the stale
+   * answer — everyone after them gets the fresh one. With no visitors at all
+   * the catalogue simply rots. Eight sweeps a day is 240 requests to Atlas,
+   * which is nothing next to being wrong.
+   */
+  async alarm(): Promise<void> {
+    let ok = true;
+    try {
+      await this.refresh();
+    } catch {
+      ok = false; // the retry below is the recovery; nothing else to do here
+    }
+    await this.state.storage.setAlarm(Date.now() + (ok ? TTL_MS : CatalogCache.RETRY_MS));
+  }
+
+  /** Start the chain the first time this object is used, and never twice. */
+  private async ensureAlarm(): Promise<void> {
+    if ((await this.state.storage.getAlarm()) === null) {
+      await this.state.storage.setAlarm(Date.now() + TTL_MS);
+    }
+  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -82,6 +121,8 @@ export class CatalogCache implements DurableObject {
       this.loadSharded<string>("names", "names"),
       this.state.storage.get<number>("refreshedAt"),
     ]);
+
+    this.state.waitUntil(this.ensureAlarm());
 
     const stale = !refreshedAt || Date.now() - refreshedAt > TTL_MS;
     if ((stale || force) && !this.refreshing) {
@@ -131,6 +172,7 @@ export class CatalogCache implements DurableObject {
           source: "live",
           count: 0,
           nodes: merge(counts, names ?? {}),
+          totals: totalsOf(counts),
         }
       : {
           refreshedAt: null,
@@ -307,6 +349,17 @@ function cleanHolder(raw: string): string {
 }
 
 const seedById = new Map(SEED_NODES.map((n) => [n.id, n]));
+
+/** Everything the last sweep saw, before any policy trims it down. */
+function totalsOf(counts: Counts): { probes: number; groups: number; countries: number } {
+  const countries = new Set<string>();
+  let probes = 0;
+  for (const [id, group] of Object.entries(counts)) {
+    probes += group[0];
+    countries.add(id.split("-")[0]);
+  }
+  return { probes, groups: Object.keys(counts).length, countries: countries.size };
+}
 
 /** One stored group as a displayable node. Shared by the catalogue and search. */
 function toNode(id: string, [v4, v6, v6asn]: Counts[string], names: Record<string, string>): Node {

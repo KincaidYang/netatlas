@@ -107,6 +107,14 @@ async function init() {
   // The result may already be on screen; the type select only exists now.
   syncFormTo(state.report);
   $("more").textContent = `展开全部 ${nodes.totalCount} 个节点`;
+  renderScale(nodes.totals);
+  // Not polled. The catalogue behind these numbers only moves when the sweep
+  // runs, every three hours, so a timer would spend hundreds of requests
+  // redrawing the same figure. The one moment it does change is this one: a
+  // stale catalogue means *this* page load just triggered a sweep and did not
+  // wait for it, so the visitor who paid for it would otherwise be the only
+  // one to see the old number. Come back once, after the edge cache expires.
+  if (nodes.stale) setTimeout(refreshScale, 65_000);
   renderRegions();
   renderPresets();
   wireSearch();
@@ -170,6 +178,43 @@ function nodeChip(n) {
     `${n.probes === 0 ? " disabled" : ""} title="${esc(n.id)} · ${esc(hint)}">` +
     `${esc(n.label)}<span class="n">${n.probes}</span></button>`
   );
+}
+
+/**
+ * What Atlas holds right now, next to what the picker shows.
+ *
+ * The catalogue curates ~240 country×operator pairs out of about five
+ * thousand, and the search box exists because of that gap — saying so is more
+ * honest than a picker that quietly implies it is the whole world. Hidden
+ * until the numbers are real: the cold-start seed has no live totals, and an
+ * invented figure would be worse than none.
+ */
+async function refreshScale() {
+  try {
+    const data = await api(state.showingAll ? "/nodes?all=1" : "/nodes");
+    // Only the headline figure: repainting the picker under someone who is
+    // mid-selection would be a worse trade than a slightly old number.
+    renderScale(data.totals);
+  } catch {
+    /* the number on screen is still true, just older */
+  }
+}
+
+function renderScale(totals) {
+  const el = $("scale");
+  if (!totals?.probes) {
+    el.hidden = true;
+    return;
+  }
+  const n = (v) => `<b>${v.toLocaleString("en-US")}</b>`;
+  // Not "此刻": the sweep is up to three hours old. And "组合" rather than
+  // "运营商", because a group is one operator *in one country* — AS3320 in
+  // Germany and in the Netherlands are two of these, not one.
+  el.innerHTML =
+    `RIPE Atlas 在线探针 ${n(totals.probes)} 个` +
+    `<span class="sep">·</span>覆盖 ${n(totals.countries)} 个国家和地区` +
+    `<span class="sep">·</span>${n(totals.groups)} 个 地区×运营商 组合全部可搜索`;
+  el.hidden = false;
 }
 
 function renderRegions() {
@@ -356,6 +401,7 @@ async function toggleAll() {
   const data = await api(state.showingAll ? "/nodes?all=1" : "/nodes");
   state.nodes = data.nodes;
   remember(data.nodes);
+  renderScale(data.totals);
   $("more").textContent = state.showingAll ? "只看常用节点" : `展开全部 ${data.totalCount} 个节点`;
   renderRegions();
 }
