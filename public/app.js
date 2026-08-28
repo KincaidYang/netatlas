@@ -50,6 +50,13 @@ const state = {
   /** Whether the result on screen is still being refreshed. */
   polling: false,
   limits: { ...CAUTIOUS_LIMITS },
+  /**
+   * "cards" | "table", or null until a run decides. Density is the reader's
+   * call; this only picks which view opens first, and both show everything.
+   */
+  view: localStorage.getItem("view") || null,
+  /** Row order held steady across polls: { id, keys }. */
+  order: null,
   selected: new Set(),
   showingAll: false,
   timer: null,
@@ -637,6 +644,22 @@ function render(report, id) {
         ? `<span class="resolved" title="${esc(ips.join(" · "))}">解析到 <b>${ips.length}</b> 个不同 IP</span>`
         : "";
 
+  // One order for both blocks, or the chart and the cards disagree about what
+  // comes first.
+  //
+  // Frozen while the run is still going. Ranks depend on results, and results
+  // arrive over minutes — re-sorting every three seconds moves rows out from
+  // under whoever is reading them. The order is taken once and kept, with
+  // newcomers appended in rank order, until the run stops updating — `running`
+  // above, which is polling *and* still short of a full response.
+  const ranked = ordered(report);
+  const groups = running && state.order?.id === id ? hold(state.order.keys, ranked) : ranked;
+  state.order = { id, keys: groups.map((g) => g.key) };
+  // Cards read better for a handful of nodes and become a wall past a dozen,
+  // so that is where the first view flips. A weak judgement on purpose: it
+  // decides what opens, never what exists, and one click overrides it for good.
+  const view = state.view ?? (groups.length > 12 ? "table" : "cards");
+
   const head =
     `<div class="runhead">` +
     `<span class="kind">${esc(report.type)}</span>` +
@@ -645,10 +668,29 @@ function render(report, id) {
     resolved +
     `<span class="fill${partial && !running ? " partial" : ""}">` +
     `${report.totalResponded}/${report.totalRequested} 个探针已回${note}</span>` +
+    `<span class="views">` +
+    `<button type="button" class="viewbtn" data-view="cards"${view === "cards" ? ' aria-pressed="true"' : ""}>卡片</button>` +
+    `<button type="button" class="viewbtn" data-view="table"${view === "table" ? ' aria-pressed="true"' : ""}>表格</button>` +
+    `</span>` +
+    `<button type="button" id="md">复制 Markdown</button>` +
     `<button type="button" id="share">复制链接</button></div>`;
 
-  const body = LATENCY_TYPES.has(report.type) ? latencyView(report) : answerView(report);
-  $("out").innerHTML = head + body + report.groups.map(sheet).join("");
+  const body = LATENCY_TYPES.has(report.type) ? latencyView(report, groups) : answerView(report);
+  const detail = view === "table" ? tableView(groups, report.type) : groups.map(sheet).join("");
+  $("out").innerHTML = head + body + detail + cliHint(report, id);
+
+  for (const btn of document.querySelectorAll("[data-view]")) {
+    btn.addEventListener("click", () => {
+      state.view = btn.dataset.view;
+      localStorage.setItem("view", state.view);
+      render(report, id);
+    });
+  }
+  $("md").addEventListener("click", async () => {
+    await navigator.clipboard.writeText(markdown(report, id));
+    $("md").textContent = "已复制";
+    setTimeout(() => ($("md").textContent = "复制 Markdown"), 1500);
+  });
 
   $("share").addEventListener("click", async () => {
     await navigator.clipboard.writeText(`${location.origin}/m/${id}`);
@@ -661,8 +703,8 @@ function render(report, id) {
  * Every node measured against one shared scale, drawn as a rule with common
  * ticks. Comparing is the entire job, so the comparison is the picture.
  */
-function latencyView(report) {
-  const rows = report.groups.map((g) => ({
+function latencyView(report, groups) {
+  const rows = groups.map((g) => ({
     label: g.label,
     rtt: g.summary?.rttMs?.avg ?? null,
     loss: g.summary?.lossPct ?? null,
@@ -715,7 +757,13 @@ function answerView(report) {
     const key = signature(report.type, g);
     if (!key) continue;
     let b = buckets.get(key);
-    if (!b) buckets.set(key, (b = { who: [], ttlMin: null, ttlMax: null }));
+    if (!b) {
+      // The records themselves, not the joined string. Splitting the display
+      // form back apart on ", " turns one TXT record containing ", " — an SPF
+      // policy, say — into several fake ones, and then counts and folds them
+      // as if the answer were large.
+      buckets.set(key, (b = { who: [], ttlMin: null, ttlMax: null, records: recordsOf(report.type, g) }));
+    }
     b.who.push(g.label);
     // TTL is each resolver's cache remainder, so it varies everywhere by
     // design — reported as a range, never used to decide who agrees.
@@ -727,10 +775,17 @@ function answerView(report) {
   }
   if (buckets.size === 0) return "";
 
-  const sorted = [...buckets.entries()].sort((a, b) => b[1].who.length - a[1].who.length);
-  // Several DNS answers across regions is ordinary GeoDNS, so this states the
-  // fact and leaves it there. Several *certificates* is worth a second look.
-  const split = sorted.length > 1;
+  const split = buckets.size > 1;
+  // Smallest group first when the answers disagree. The finding is who is the
+  // odd one out, not who is normal — naming the eight nodes that agree buries
+  // the one that does not, and at 50 selectable nodes it buries it under a
+  // paragraph. DNS keeps largest-first: several answers across regions is
+  // ordinary GeoDNS, where no group is the exception.
+  const sorted = [...buckets.entries()].sort((a, b) =>
+    report.type === "dns" || !split
+      ? b[1].who.length - a[1].who.length
+      : a[1].who.length - b[1].who.length,
+  );
   const verdict =
     report.type === "dns"
       ? `<p class="verdict">${split ? `各地返回 ${sorted.length} 组结果` : "各地结果一致"}</p>`
@@ -738,30 +793,193 @@ function answerView(report) {
         ? `<p class="verdict split">各地证书不一致 · ${sorted.length} 种</p>`
         : `<p class="verdict">各地证书一致</p>`;
 
+  // Naming every node stops being information somewhere around four, and
+  // truncating the list is the wrong lever — the labels are "国家 · 运营商",
+  // so a roll-call repeats the country once per operator. Past four, collapse
+  // to countries: "香港×3、台湾×3" is a fifth of the width of naming six
+  // carriers and answers the question people are actually scanning for, which
+  // is which places saw this. The full list stays on the element's title.
+  const NAMED = 4;
+  const who = (names) => {
+    if (names.length <= NAMED) return names.join("、");
+    const byCountry = new Map();
+    for (const n of names) {
+      const country = n.split(" · ")[0];
+      byCountry.set(country, (byCountry.get(country) ?? 0) + 1);
+    }
+    const ranked = [...byCountry.entries()].sort((a, b) => b[1] - a[1]);
+    // Collapsing to countries only helps when several operators share a few of
+    // them. Fifty selectable nodes can span fifty countries, and then the list
+    // is just as long in a different unit — so it is capped too.
+    const CAP = 4;
+    const head = ranked
+      .slice(0, CAP)
+      .map(([country, n]) => (n > 1 ? `${country}×${n}` : country))
+      .join("、");
+    const rest = ranked.length - CAP;
+    return rest > 0 ? `${head} +${rest} 个地区` : head;
+  };
+
+  // "A 104.26.14.87, A 104.26.15.87" says A twice for a query that was A, and
+  // the record type is already in the header. Dropped only when every record
+  // in the group shares one type — an ANY query genuinely needs it on each.
+  // Dropped only when the header already names the record type. An ANY query
+  // that happens to return one type still needs it on every line: the header
+  // says ANY, so without the prefix there is no way to tell whether the value
+  // is an MX, a TXT or an HINFO.
+  const strip = (records) => {
+    const types = new Set(records.map((r) => r.slice(0, r.indexOf(" "))));
+    const named = report.type === "dns" && report.queryType && report.queryType !== "ANY";
+    return named && types.size === 1 && types.has(report.queryType)
+      ? records.map((r) => r.slice(r.indexOf(" ") + 1))
+      : records;
+  };
+
+  /**
+   * Three addresses is a line; thirty is a wall. A large site can answer with
+   * dozens of A records, and this block sits above the results — so past a
+   * handful it states the count and puts the list one click away, the same
+   * shape the traceroute hop list uses. Nothing is hidden, and the block stops
+   * growing with the size of the answer.
+   */
+  const INLINE = 3;
+  const display = (records) => {
+    const parts = strip(records);
+    if (parts.length <= INLINE) return esc(parts.join(", "));
+    return (
+      `<details class="more"><summary>${parts.length} 个地址 · ${esc(parts[0])} …</summary>` +
+      `${esc(parts.join(", "))}</details>`
+    );
+  };
+
   return (
     verdict +
     sorted
-      .map(([answer, b], i) => {
+      .map(([, b], i) => {
         const ttl =
           b.ttlMin === null
             ? ""
             : ` · TTL ${b.ttlMin}${b.ttlMax !== b.ttlMin ? `–${b.ttlMax}` : ""}`;
+        // The majority in a split needs no roll-call: it is everyone else.
+        const label =
+          split && i === sorted.length - 1 && b.who.length > NAMED
+            ? `其余 ${b.who.length} 个节点`
+            : `${b.who.length} 个节点 · ${who(b.who)}`;
         return (
-          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${esc(answer)}</div>` +
-          `<div class="who">${b.who.length} 个节点 · ${esc(b.who.join("、"))}${esc(ttl)}</div></div>`
+          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${display(b.records)}</div>` +
+          `<div class="who" title="${esc(b.who.join("、"))}">${esc(label)}${esc(ttl)}</div></div>`
         );
       })
       .join("")
   );
 }
 
+/**
+ * A group's answer as a list, which is what the display needs. `signature()`
+ * flattens the same thing into one string to use as a bucket key; that string
+ * must never be taken apart again.
+ */
+function recordsOf(type, group) {
+  if (type === "dns") return group.summary?.distinctAnswers ?? [];
+  const fp = group.summary?.fingerprint;
+  return fp ? [`SHA-256 ${fp.slice(0, 16)}…`] : [];
+}
+
+/**
+ * A bucket key, and only a key — never taken apart again, and never ambiguous.
+ *
+ * `distinctAnswers.join(", ")` had the same flaw `sharedAnswer` did: a record
+ * whose data contains the delimiter collides with a different set of records
+ * that happens to serialise the same way, and two nodes that disagree get
+ * bucketed as agreeing. Codex found it in `sharedAnswer`; it was here too.
+ */
 function signature(type, group) {
   if (type === "dns") {
     const answers = group.summary?.distinctAnswers ?? [];
-    return answers.length ? answers.join(", ") : null;
+    return answers.length ? JSON.stringify([...answers].sort()) : null;
   }
   const fp = group.summary?.fingerprint;
   return fp ? `SHA-256 ${fp.slice(0, 16)}…` : null;
+}
+
+/**
+ * Which probes in this node are far from their peers.
+ *
+ * Two conditions, not one. A ratio alone flags 0.8 ms against 14 ms — a
+ * resolver cache hit next to a miss, seventeen times apart and thirteen
+ * milliseconds of difference nobody can act on. An absolute gap alone flags
+ * every slow-but-consistent node. Together they catch what this run actually
+ * contains: HKT 12 → 156 ms and TANet 22 → 190 ms, same answers from the same
+ * operator, one probe taking an order of magnitude longer.
+ */
+const OUTLIER_RATIO = 3;
+const OUTLIER_GAP_MS = 100;
+
+function outliers(probes) {
+  const times = probes.map((p) => p.rttMs).filter((v) => v != null);
+  if (times.length < 2) return new Set();
+  const min = Math.min(...times);
+  const max = Math.max(...times);
+  if (max < min * OUTLIER_RATIO || max - min < OUTLIER_GAP_MS) return new Set();
+  // Both conditions again, per probe. The group gate only says *someone* is far
+  // out; applying the ratio alone here then reddens everyone above 3x the
+  // baseline, including a probe 30 ms away that the documented 100 ms rule
+  // would never have called an outlier. 10 / 40 / 150 ms should mark the 150.
+  return new Set(
+    probes
+      .filter((p) => p.rttMs != null && p.rttMs >= min * OUTLIER_RATIO && p.rttMs - min >= OUTLIER_GAP_MS)
+      .map((p) => p.probeId),
+  );
+}
+
+/**
+ * How interesting a node is, lowest first — the order the page uses.
+ *
+ * Sorted in the console rather than in `src/aggregate.ts` on purpose: the API's
+ * order is part of what a shared `/m/<id>` returns and callers can depend on
+ * it, while how to present it is this page's business. Ranking here also lets
+ * the bar chart and the cards agree without the server knowing about either.
+ */
+function rank(group, minority) {
+  if (group.responded === 0 || group.responded < group.requested) return 0;
+  if (group.probes.some((p) => !p.ok) || group.summary?.lossPct > 0) return 1;
+  if (minority.has(group.key)) return 2;
+  if (outliers(group.probes).size > 0) return 3;
+  return 4;
+}
+
+/**
+ * Node keys whose answer disagrees with the majority. Empty unless the answers
+ * actually split — when everyone agrees there is no minority to promote.
+ */
+function minorityKeys(report) {
+  const buckets = new Map();
+  for (const g of report.groups) {
+    if (g.responded === 0) continue;
+    const key = signature(report.type, g);
+    if (!key) continue;
+    buckets.set(key, [...(buckets.get(key) ?? []), g.key]);
+  }
+  if (buckets.size < 2) return new Set();
+  const biggest = Math.max(...[...buckets.values()].map((v) => v.length));
+  return new Set([...buckets.values()].filter((v) => v.length < biggest).flat());
+}
+
+/** Keep the established order; anything new goes after it, already ranked. */
+function hold(keys, ranked) {
+  const seen = new Map(ranked.map((g) => [g.key, g]));
+  const kept = keys.map((k) => seen.get(k)).filter(Boolean);
+  const fresh = ranked.filter((g) => !keys.includes(g.key));
+  return [...kept, ...fresh];
+}
+
+/** Problem first, then slowest to fastest. */
+function ordered(report) {
+  const minority = minorityKeys(report);
+  return [...report.groups]
+    .map((g) => ({ g, r: rank(g, minority), t: g.summary?.rttMs?.avg ?? -1 }))
+    .sort((a, b) => a.r - b.r || b.t - a.t || a.g.key.localeCompare(b.g.key))
+    .map((x) => x.g);
 }
 
 function sheet(group) {
@@ -775,14 +993,272 @@ function sheet(group) {
   const partial = group.responded < group.requested;
   const asn = group.probes[0]?.asn;
   const spread = citySpread(group.probes);
-  return (
-    `<article class="sheet ${failed ? "fail" : "done"}">` +
+  // Types that get the answer view have no bar chart, so this header is the
+  // only place two nodes can be compared on speed at a glance.
+  const r = group.summary?.rttMs;
+  const took =
+    r && !LATENCY_TYPES.has(state.report?.type)
+      ? r.min === r.max
+        ? ms(r.min)
+        : `${ms(r.min)} – ${ms(r.max)}`
+      : "";
+  const odd = outliers(group.probes);
+  // Every probe agreed, so print the answer once and keep a line each. NOT the
+  // whole card: two probes can return the same records twelve times apart
+  // (HKT 12 ms and 156 ms on the same three addresses), and folding by answer
+  // would delete exactly that.
+  const shared = sharedAnswer(group);
+  const body = shared
+    ? `<div class="shared">${shared}</div>` +
+      group.probes.map((p) => probeLine(p, odd.has(p.probeId))).join("")
+    : group.probes.map((p) => probeBody(p, group.probes.length > 1, odd)).join("");
+
+  const header =
     `<header><span class="node">${esc(group.label)}</span>` +
     `${asn ? `<span class="asn">AS${esc(asn)}</span>` : ""}` +
     `${spread ? `<span class="cities">${esc(spread)}</span>` : ""}` +
-    `<span class="stamp${partial ? " err" : ""}">${group.responded}/${group.requested} 探针</span></header>` +
-    `<div class="body">${group.probes.map((p) => probeBody(p, group.probes.length > 1)).join("")}</div></article>`
+    `${took ? `<span class="took">${esc(took)}</span>` : ""}` +
+    `<span class="stamp${partial ? " err" : ""}">${group.responded}/${group.requested} 探针</span></header>`;
+
+  // No folding by "this looks unremarkable". Being an outlier may move a node
+  // up the page and colour its number — both push information at the reader —
+  // but it must never decide what they do not get to see. The rule for that
+  // would be mine, and the thresholds behind it are guesses; the table view
+  // solves the same length problem by letting them choose the density instead.
+  return `<article class="sheet ${failed ? "fail" : "done"}">${header}<div class="body">${body}</div></article>`;
+}
+
+/**
+ * The answer every probe in this node returned, or null when they differ.
+ * Rendered once above the probe lines instead of once per probe: six nodes
+ * each repeating the same three Cloudflare addresses twice printed them
+ * thirty-six times for a fact the summary already stated.
+ */
+function sharedAnswer(group) {
+  const answers = group.probes.map((p) => p.detail?.answers);
+  if (!answers.every((a) => Array.isArray(a) && a.length)) return null;
+  // TTL is deliberately out of the key. It is each resolver's cache remainder,
+  // so it differs everywhere by design — `summarize` in src/measurements/dnsKind.ts
+  // says so and refuses to let it decide who agrees. Including it here split
+  // 香港·香港宽频 over 77 vs 120 seconds on identical addresses.
+  // Compared structurally. Joining with a delimiter — any delimiter — is
+  // ambiguous against record data that contains it: one TXT whose value is
+  // `bar|TXT foo` serialises identically to two TXT records `bar` and `foo`,
+  // and this function would then call two different answers the same and print
+  // only the first. The same mistake as reparsing on ", ", one level up.
+  const norm = (a) =>
+    a.map((r) => [r.type, r.data]).sort((x, y) => x[0].localeCompare(y[0]) || x[1].localeCompare(y[1]));
+  const first = norm(answers[0]);
+  const same = (a) => a.length === first.length && a.every((r, i) => r[0] === first[i][0] && r[1] === first[i][1]);
+  if (!answers.every((a) => same(norm(a)))) return null;
+
+  // Which does mean the TTLs on show are a range, not a number.
+  const ttls = new Map();
+  for (const a of answers) {
+    for (const r of a) {
+      const k = JSON.stringify([r.type, r.data]);
+      const seen = ttls.get(k) ?? [];
+      ttls.set(k, [...seen, r.ttl]);
+    }
+  }
+  return answers[0]
+    .map((a) => {
+      const k = JSON.stringify([a.type, a.data]);
+      const vs = (ttls.get(k) ?? []).filter((v) => v != null);
+      const lo = Math.min(...vs);
+      const hi = Math.max(...vs);
+      const ttl = vs.length === 0 ? "" : lo === hi ? `ttl ${lo}` : `ttl ${lo}–${hi}`;
+      return `${esc(a.type)} ${esc(a.data)}${ttl ? `<span class="ttl">${esc(ttl)}</span>` : ""}`;
+    })
+    .join("<br>");
+}
+
+/** One probe, when its answer is already printed above: where and how long. */
+function probeLine(p, isOutlier) {
+  const bits = [`探针 #${esc(p.probeId)}`];
+  if (p.city) bits.push(esc(p.city));
+  if (p.from) bits.push(esc(p.from));
+  const time = p.rttMs == null ? "" : `<span class="${isOutlier ? "slow" : ""}">${esc(ms(p.rttMs))}</span>`;
+  return `<div class="pid line">${bits.join(" · ")}${time ? ` · ${time}` : ""}</div>`;
+}
+
+/**
+ * One row per probe, the shape every other probing tool converges on
+ * (check-host, ping.pe): a dense grid you scan down a column. The cards say
+ * more per node; this says more per screen, and which one a reader wants
+ * depends on whether they are diagnosing one node or comparing fifty. The
+ * choice is theirs and it is remembered.
+ *
+ * The destination address is a column on purpose — geo-steered DNS is legible
+ * by scanning it, which is how check-host makes the same point without a
+ * summary block at all.
+ */
+function tableView(groups, type) {
+  const rows = groups.flatMap((g) =>
+    g.probes.length === 0
+      ? [
+          `<tr class="down"><td>${esc(g.label)}</td><td class="c">—</td><td colspan="3">` +
+            `等待中 0/${g.requested}</td></tr>`,
+        ]
+      : (() => {
+          const odd = outliers(g.probes);
+          return g.probes.map((p, i) => {
+            const t = p.rttMs ?? p.detail?.avg;
+            return (
+              `<tr class="${p.ok ? "" : "down"}">` +
+              `<td>${i === 0 ? esc(g.label) : ""}</td>` +
+              `<td class="c">${esc(p.city ?? "")}</td>` +
+              `<td class="n${odd.has(p.probeId) ? " slow" : ""}">${t == null ? "—" : esc(ms(t))}</td>` +
+              `<td class="a">${cell(outcome(type, p))}</td>` +
+              `<td class="e">${p.ok ? "" : esc(p.error ?? "失败")}</td></tr>`
+            );
+          });
+        })(),
   );
+  return (
+    `<table class="grid"><thead><tr><th>节点</th><th>城市</th><th>耗时</th>` +
+    `<th>目标 / 答案</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+  );
+}
+
+/**
+ * What this measurement actually found, for one probe, in one cell.
+ *
+ * Not the destination address for every type: an ntp run's finding is the
+ * clock offset and whether the server has heard from its upstream lately, and
+ * a table showing only round-trip time would report a server that is hours
+ * adrift as healthy — `ok` stays true, and the chart above plots RTT. Each
+ * type gets the field it exists to measure.
+ */
+function outcome(type, p) {
+  const d = p.detail || {};
+  const part = (text, cls) => ({ text: String(text), cls });
+  // Deliberately not short-circuiting on `!p.ok`. A traceroute that never
+  // arrives is marked failed and still carries the hop count, the timeouts and
+  // how far it got — which is the entire diagnostic value of a failed
+  // traceroute. An expired certificate is failed and still has a subject and a
+  // date. The error column says what went wrong; this column keeps saying what
+  // was seen.
+  if (type === "ntp") {
+    const bits = [];
+    if (d.offsetMs != null) bits.push(part(`偏移 ${ms(d.offsetMs)}`, "strong"));
+    if (d.stratum != null) bits.push(part(`层级 ${d.stratum}`));
+    // A free-running server still advertises a healthy stratum; this is how a
+    // reader catches that without opening the card.
+    if (d.refAgeSec != null && d.refAgeSec > 3600) bits.push(part(`上游 ${age(d.refAgeSec)}前`, "slow"));
+    if (d.probeClockAgeSec != null && d.probeClockAgeSec > 3600)
+      bits.push(part(`探针时钟 ${age(d.probeClockAgeSec)}前`, "slow"));
+    return bits;
+  }
+  if (type === "sslcert") {
+    const bits = [];
+    if (d.subjectCN) bits.push(part(d.subjectCN));
+    if (d.daysLeft != null)
+      bits.push(
+        d.daysLeft < 0
+          ? part(`已过期 ${Math.abs(d.daysLeft)} 天`, "slow")
+          : part(`剩 ${d.daysLeft} 天`, d.daysLeft < 14 ? "slow" : undefined),
+      );
+    if (d.issuerO || d.issuerCN) bits.push(part(d.issuerO ?? d.issuerCN));
+    return bits;
+  }
+  if (type === "http") {
+    const bits = [];
+    if (d.status != null) bits.push(part(d.status, d.status >= 400 ? "slow" : "strong"));
+    if (d.httpVersion) bits.push(part(d.httpVersion));
+    if (d.dstAddr) bits.push(part(d.dstAddr));
+    return bits;
+  }
+  if (type === "traceroute") {
+    const bits = [];
+    if (d.hopCount != null) bits.push(part(`${d.hopCount} 跳`));
+    if (d.reached === false) bits.push(part("未到达", "slow"));
+    if (d.lossyHops > 0) bits.push(part(`${d.lossyHops} 跳有丢包`, "slow"));
+    if (d.timeouts > 0) bits.push(part(`${d.timeouts} 跳超时`, "slow"));
+    if (d.dstAddr) bits.push(part(d.dstAddr));
+    return bits;
+  }
+  if (type === "ping") {
+    const bits = [];
+    if (d.lossPct > 0) bits.push(part(`丢包 ${d.lossPct}%`, "slow"));
+    if (d.dstAddr) bits.push(part(d.dstAddr));
+    return bits;
+  }
+  // One part per record. Joining them with a space made a single TXT valued
+  // `foo A bar` identical to two records `TXT foo` and `A bar` — the same
+  // delimiter mistake as the two above it, in the last place it survived. The
+  // sinks below decide how to separate parts; this never flattens them.
+  if (Array.isArray(d.answers)) return d.answers.map((a) => part(`${a.type} ${a.data}`));
+  return d.dstAddr ? [part(d.dstAddr)] : [];
+}
+
+/** Parts as table HTML — one element each, so boundaries survive the DOM. */
+function cell(parts) {
+  return parts
+    .map((x) => `<span class="rec${x.cls ? ` ${x.cls}` : ""}">${esc(x.text)}</span>`)
+    .join("");
+}
+
+/**
+ * Parts as Markdown. Each is a code span, so a value containing the separator
+ * cannot be read as two — the boundary is the fence, not a character that
+ * could occur in the data.
+ *
+ * The fence is longer than the longest backtick run inside the value, which is
+ * how CommonMark says to do it, and a value that starts or ends with a
+ * backtick gets one space of padding that the renderer eats again. An earlier
+ * version replaced backticks with apostrophes: silently rewriting a measured
+ * record, in a tool whose entire claim is that it does not.
+ *
+ * `|` is escaped because a pipe ends a table cell no matter what encloses it.
+ * That is a change to the Markdown, not to the value — it renders back as the
+ * character that was measured.
+ */
+function plain(parts) {
+  return parts
+    .map((x) => {
+      const longest = Math.max(0, ...[...x.text.matchAll(/`+/g)].map((m) => m[0].length));
+      const fence = "`".repeat(longest + 1);
+      const pad = x.text.startsWith("`") || x.text.endsWith("`") ? " " : "";
+      return `${fence}${pad}${x.text.replace(/\|/g, "\\|")}${pad}${fence}`;
+    })
+    .join(" ");
+}
+
+/** The same run as a curl the reader can paste — the API is the product too. */
+function cliHint(report, id) {
+  return (
+    `<div class="cli"><span>等效命令</span>` +
+    `<code>curl -s ${esc(location.origin)}/api/v1/m/${esc(id)}</code></div>`
+  );
+}
+
+/** Results as a Markdown table, for pasting into a ticket or a chat. */
+function markdown(report, id) {
+  const lines = [
+    `**${report.type}${report.queryType ? ` ${report.queryType}` : ""} ${report.target}** — ${report.totalResponded}/${report.totalRequested} 探针`,
+    "",
+    "| 节点 | 城市 | 耗时 | 目标 / 答案 |",
+    "| --- | --- | --- | --- |",
+  ];
+  for (const g of ordered(report)) {
+    if (g.probes.length === 0) {
+      lines.push(`| ${g.label} | — | — | 等待中 0/${g.requested} |`);
+      continue;
+    }
+    for (const p of g.probes) {
+      // Same source as the table, or the two drift.
+      const t = p.rttMs ?? p.detail?.avg;
+      // Unconditional, like the table: a traceroute that never arrived still
+      // has its hop count and an expired certificate still has its subject.
+      // The error joins it rather than replacing it.
+      const seen = plain(outcome(report.type, p));
+      const text = [seen, p.ok ? "" : (p.error ?? "失败")].filter(Boolean).join(" · ");
+      lines.push(`| ${g.label} | ${p.city ?? ""} | ${t == null ? "—" : ms(t)} | ${text || "—"} |`);
+    }
+  }
+  lines.push("", `${location.origin}/m/${id}`);
+  return lines.join("\n");
 }
 
 /**
@@ -802,13 +1278,24 @@ function citySpread(probes) {
     .join(" ");
 }
 
-function probeBody(p, labelled) {
+function probeBody(p, labelled, odd) {
   // The city is worth a line even for a lone probe — "中国·电信" says nothing
   // about whether this was measured from Beijing or Ürümqi.
+  // For dns the query time is the only latency there is, and nothing else on
+  // the page shows it — the answer view replaces the bar chart these types
+  // would otherwise get. It rides the existing line rather than adding one:
+  // seventeen probes is seventeen new rows on a page already accused of
+  // sprawling. Note this is the query round trip, not `解析耗时` below, which
+  // is the probe resolving the target's own name.
+  const slow = odd?.has(p.probeId) ? " slow" : "";
+  const queryMs =
+    Array.isArray(p.detail?.answers) && p.rttMs != null
+      ? ` · <span class="${slow.trim()}">${esc(ms(p.rttMs))}</span>`
+      : "";
   const tag =
-    labelled || p.city
+    labelled || p.city || queryMs
       ? `<div class="pid">探针 #${esc(p.probeId)}` +
-        `${p.city ? ` · ${esc(p.city)}` : ""}${p.from ? ` · ${esc(p.from)}` : ""}</div>`
+        `${p.city ? ` · ${esc(p.city)}` : ""}${p.from ? ` · ${esc(p.from)}` : ""}${queryMs}</div>`
       : "";
   if (p.error && !p.ok && Object.keys(p.detail || {}).length === 0) {
     return `<div class="probe">${tag}<span class="stamp err">${esc(p.error)}</span></div>`;
