@@ -106,7 +106,7 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
   let take: Awaited<ReturnType<typeof rateCheck>>;
   try {
     // Reads are public, so node resolution always uses the platform key.
-    selection = await resolveNodes(new AtlasClient(env.ATLAS_API_KEY), nodeIds, perNode, af);
+    selection = await resolveNodes(new AtlasClient(env.ATLAS_API_KEY), nodeIds, perNode, af, policy.maxProbes);
     const totalProbes = Object.values(selection.requested).reduce((a, b) => a + b, 0);
     credits = kind.creditsPerProbe(params) * totalProbes;
 

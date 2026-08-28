@@ -115,6 +115,7 @@ meta.get("/quota", async (c) => {
     creditsLimit: rate.creditsLimit || null,
     maxNodes: policy.maxNodes,
     maxPerNode: policy.maxPerNode,
+    maxProbes: policy.maxProbes,
     publicBudget: { remaining: budget.remaining, limit: budget.limit },
   });
 });

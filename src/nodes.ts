@@ -91,10 +91,18 @@ export function searchNodes(nodes: Node[], query: string, limit: number): Node[]
     .slice(0, limit);
 }
 
-/** Hard ceilings; Phase C's quota layer tightens these per caller. */
-export const MAX_NODES = 25;
+/**
+ * Hard ceilings; the quota layer in src/quota.ts tightens these per caller.
+ *
+ * MAX_NODES is not a pricing decision — a BYOK caller pays their own credits.
+ * It bounds the work one request makes us do: `resolveNodes` issues an Atlas
+ * lookup per chunk of nodes and emits one probe group per node, and a Worker
+ * has a finite subrequest budget. Above the probe ceiling it is meaningless
+ * anyway, since every node needs at least one probe to answer.
+ */
+export const MAX_NODES = 50;
 export const MAX_PROBES_PER_NODE = 3;
-export const MAX_TOTAL_PROBES = 60;
+export const MAX_TOTAL_PROBES = 150;
 
 /** Named selections, resolved against the real catalogue at build time. */
 export const NODE_PRESETS: Record<string, string[]> = catalog.presets as Record<string, string[]>;
@@ -177,6 +185,7 @@ export async function resolveNodes(
   nodeIds: string[],
   perNode: number,
   af: 4 | 6,
+  maxProbes: number = MAX_TOTAL_PROBES,
 ): Promise<ResolvedSelection> {
   const ids = [...new Set(nodeIds.map((n) => n.trim().toLowerCase()))].filter(Boolean);
   if (ids.length === 0) throw new HTTPException(400, { message: "'nodes' must list at least one node" });
@@ -201,7 +210,11 @@ export async function resolveNodes(
       id,
       cc: parsed.cc,
       asn: parsed.asn,
-      asnV6: parsed.asn,
+      // Deliberately null, not the v4 ASN. A node id carries one ASN and the
+      // catalogue is what knows whether the operator's IPv6 rides a different
+      // one; assuming they match made every such node look empty over IPv6.
+      // See the unknown-v6 path below.
+      asnV6: null,
       label: labelForId(id),
       holder: null,
       continent: "??",
@@ -211,9 +224,12 @@ export async function resolveNodes(
   });
 
   const per = Math.min(Math.max(Math.floor(perNode) || 1, 1), MAX_PROBES_PER_NODE);
-  if (nodes.length * per > MAX_TOTAL_PROBES) {
+  const ceiling = Math.min(maxProbes, MAX_TOTAL_PROBES);
+  if (nodes.length * per > ceiling) {
     throw new HTTPException(400, {
-      message: `requested ${nodes.length * per} probes exceeds cap of ${MAX_TOTAL_PROBES}`,
+      message:
+        `requested ${nodes.length * per} probes (${nodes.length} nodes x ${per}) ` +
+        `exceeds cap of ${ceiling}; select fewer nodes or lower perNode`,
     });
   }
 
@@ -238,48 +254,101 @@ export async function resolveNodes(
 
   const pools = new Map<string, number[]>(nodes.map((n) => [n.id, []]));
 
-  const collect = (chunk: Node[], found: ProbeMeta[]): void => {
+  /**
+   * Probes of a node whose IPv6 ASN we do not know, keyed by node id.
+   *
+   * These come back from a v4-keyed query, so they are "this operator's probes
+   * that also have IPv6" — which is not the same as "this operator's IPv6".
+   * A probe can reach v6 through a tunnel broker on a completely different AS,
+   * and measuring Hurricane Electric's path while claiming the operator's is
+   * exactly the kind of quiet wrongness this codebase exists to avoid. They
+   * are narrowed to one ASN below.
+   */
+  const v6Candidates = new Map<string, ProbeMeta[]>();
+
+  const collect = (chunk: Node[], found: ProbeMeta[], keyBy: 4 | 6): void => {
     for (const probe of found) {
       const cc = probe.country_code?.toLowerCase();
-      const asn = af === 6 ? probe.asn_v6 : probe.asn_v4;
-      if (!cc || !asn) continue;
+      if (!cc) continue;
+      const asn = keyBy === 6 ? probe.asn_v6 : probe.asn_v4;
+      if (!asn) continue;
       // country_code__in + asn__in is an AND of two OR-sets, so the response
       // can contain pairs nobody asked for. Keep only exact matches.
       const node = chunk.find(
-        (n) => n.cc.toLowerCase() === cc && (af === 6 ? (n.asnV6 ?? n.asn) : n.asn) === asn,
+        (n) => n.cc.toLowerCase() === cc && (keyBy === 6 ? (n.asnV6 ?? n.asn) : n.asn) === asn,
       );
-      if (node) pools.get(node.id)!.push(probe.id);
+      if (!node) continue;
+      if (af === 6 && keyBy === 4) {
+        if (!probe.asn_v6) continue; // no IPv6 at all — cannot serve an af:6 run
+        const list = v6Candidates.get(node.id) ?? [];
+        list.push(probe);
+        v6Candidates.set(node.id, list);
+      } else {
+        pools.get(node.id)!.push(probe.id);
+      }
     }
   };
 
-  const lookup = (group: Node[]): Promise<ProbeMeta[]> =>
+  const lookup = (group: Node[], keyBy: 4 | 6): Promise<ProbeMeta[]> =>
     client.findProbes({
-      asns: [...new Set(group.flatMap((n) => (af === 6 ? [n.asnV6 ?? n.asn] : [n.asn])))],
+      asns: [...new Set(group.map((n) => (keyBy === 6 ? (n.asnV6 ?? n.asn) : n.asn)))],
       countries: [...new Set(group.map((n) => n.cc))],
-      af,
+      af: keyBy,
       limit: 500,
     });
 
+  /**
+   * Which ASN this node's IPv6 actually belongs to, when the catalogue never
+   * said. The most common one among its probes — the same rule the catalogue
+   * applies when it records a group's dominant v6 ASN, so a node resolved this
+   * way and one resolved from the catalogue mean the same thing.
+   */
+  const dominantV6 = (probes: ProbeMeta[]): number | null => {
+    const tally = new Map<number, number>();
+    for (const p of probes) if (p.asn_v6) tally.set(p.asn_v6, (tally.get(p.asn_v6) ?? 0) + 1);
+    return [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  };
+
+  // Over IPv6 a node the catalogue never saw has no known v6 ASN, so it is
+  // queried by its v4 ASN and narrowed afterwards. Everything else keeps the
+  // query it always had.
+  const keyFor = (node: Node): 4 | 6 => (af === 6 && node.asnV6 === null ? 4 : af);
+
   await Promise.all(
-    chunks.map(async (chunk) => {
-      try {
-        collect(chunk, await lookup(chunk));
-      } catch {
-        // One bad input (an unknown country code, say) makes Atlas reject the
-        // whole batch. Retry node by node so a single bogus entry degrades to
-        // "unavailable" instead of failing everybody else's measurement.
-        await Promise.all(
-          chunk.map(async (node) => {
-            try {
-              collect([node], await lookup([node]));
-            } catch {
-              /* leaves the pool empty → reported as unavailable */
-            }
-          }),
-        );
+    chunks.flatMap((chunk) => {
+      const byKey = new Map<4 | 6, Node[]>();
+      for (const node of chunk) {
+        const key = keyFor(node);
+        byKey.set(key, [...(byKey.get(key) ?? []), node]);
       }
+      return [...byKey.entries()].map(async ([keyBy, group]) => {
+        try {
+          collect(group, await lookup(group, keyBy), keyBy);
+        } catch {
+          // One bad input (an unknown country code, say) makes Atlas reject the
+          // whole batch. Retry node by node so a single bogus entry degrades to
+          // "unavailable" instead of failing everybody else's measurement.
+          await Promise.all(
+            group.map(async (node) => {
+              try {
+                collect([node], await lookup([node], keyBy), keyBy);
+              } catch {
+                /* leaves the pool empty → reported as unavailable */
+              }
+            }),
+          );
+        }
+      });
     }),
   );
+
+  // Narrow each unknown-v6 node to a single IPv6 ASN, so a selection cannot
+  // mix an operator's native v6 with a tunnel broker's.
+  for (const [id, candidates] of v6Candidates) {
+    const asn = dominantV6(candidates);
+    if (asn === null) continue;
+    pools.get(id)!.push(...candidates.filter((p) => p.asn_v6 === asn).map((p) => p.id));
+  }
 
   const probes: ProbeSelectionGroup[] = [];
   const requested: Record<string, number> = {};

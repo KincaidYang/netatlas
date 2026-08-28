@@ -3,6 +3,7 @@
 /* netatlas console — no build step, no framework. */
 
 const API = "/api/v1";
+/** Probes per node when the selection is small enough to afford them. */
 const PER_NODE = 2;
 const POLL_MS = 3000;
 /** Ceiling once results stop arriving; see load(). */
@@ -41,7 +42,11 @@ const state = {
   report: null,
   /** Whether the result on screen is still being refreshed. */
   polling: false,
-  limits: { maxNodes: 8, maxPerNode: 2 },
+  /**
+   * Conservative until /quota answers: too small only trims a selection, too
+   * large invites a 400 the caller cannot see coming.
+   */
+  limits: { maxNodes: 8, maxPerNode: 2, maxProbes: 16 },
   selected: new Set(),
   showingAll: false,
   timer: null,
@@ -298,20 +303,25 @@ const PRESET_LABELS = {
 };
 const presetLabel = (name) => PRESET_LABELS[name] || name;
 
-async function applyPreset(name) {
+/**
+ * Apply a preset.
+ *
+ * The selection happens **synchronously**, before anything is fetched: a click
+ * must be in effect by the time it returns, or submitting straight afterwards
+ * measures the previous preset, and a second click can be overtaken by the
+ * first one's late response.
+ *
+ * Only the labels are hydrated asynchronously — a preset may name nodes
+ * outside the short featured list (中国 reaches for Hong Kong and Taiwan
+ * carriers that are not in it), and those would otherwise read as bare ids.
+ * That request is guarded by a sequence token so a slow one cannot repaint a
+ * newer preset's summary.
+ */
+let presetSeq = 0;
+
+function applyPreset(name) {
   const ids = state.presets[name];
   if (!ids) return;
-  // A preset may name nodes outside the short featured list — 中国 reaches for
-  // Hong Kong and Taiwan carriers that are not in it. Dropping those silently
-  // would make the button select fewer nodes than it says. Pull the full
-  // catalogue once so their labels are known too.
-  if (ids.some((id) => !state.known.has(id))) {
-    try {
-      remember((await api("/nodes?all=1")).nodes);
-    } catch {
-      /* labels degrade to the id; selection still works, ids are self-describing */
-    }
-  }
   // Only drop what we know is empty. An unknown id is still measurable — the
   // server resolves `cc-asn` against live Atlas, not against this catalogue.
   const usable = ids.filter((id) => (state.known.get(id)?.probes ?? 1) > 0);
@@ -319,6 +329,19 @@ async function applyPreset(name) {
   // tier allows; trim rather than let the server reject the default flow.
   state.selected = new Set(usable.slice(0, state.limits.maxNodes));
   syncChips();
+
+  const seq = ++presetSeq;
+  if (ids.some((id) => !state.known.has(id))) {
+    api("/nodes?all=1")
+      .then((data) => {
+        if (seq !== presetSeq) return;
+        remember(data.nodes);
+        syncChosen();
+      })
+      .catch(() => {
+        /* labels degrade to the id; selection already happened and still works */
+      });
+  }
 }
 
 async function toggleAll() {
@@ -352,6 +375,20 @@ function syncChosen() {
     : "未选节点";
 }
 
+/**
+ * Probes per node for the current selection.
+ *
+ * The server caps nodes x probes, not nodes alone — two probes each across 50
+ * nodes is 100, over the anonymous ceiling of 50. Asking for more than fits
+ * would be rejected outright, so a wide selection trades depth for breadth
+ * instead of failing. Never below one: that is what makes the node a node.
+ */
+function probesPerNode(n) {
+  const cap = state.limits.maxProbes ?? 50;
+  const want = Math.min(PER_NODE, state.limits.maxPerNode ?? PER_NODE);
+  return n > 0 ? Math.max(1, Math.min(want, Math.floor(cap / n))) : want;
+}
+
 function updateCost() {
   const type = state.types.find((t) => t.type === $("type").value);
   const n = state.selected.size;
@@ -359,8 +396,12 @@ function updateCost() {
     $("cost").textContent = "选择节点后估算消耗";
     return;
   }
-  const credits = type.creditsPerProbe * n * PER_NODE;
-  $("cost").innerHTML = `<b>${n}</b> 个节点 × ${PER_NODE} 探针 · 预估 <b>${credits}</b> credits`;
+  const per = probesPerNode(n);
+  const credits = type.creditsPerProbe * n * per;
+  const note = per < Math.min(PER_NODE, state.limits.maxPerNode ?? PER_NODE)
+    ? `（节点多，每节点降到 ${per} 个探针以内不超上限）`
+    : "";
+  $("cost").innerHTML = `<b>${n}</b> 个节点 × ${per} 探针 · 预估 <b>${credits}</b> credits${esc(note)}`;
 }
 
 function syncTypeHint() {
@@ -379,7 +420,7 @@ function syncTypeHint() {
 async function refreshQuota() {
   try {
     const q = await api("/quota");
-    state.limits = { maxNodes: q.maxNodes, maxPerNode: q.maxPerNode };
+    state.limits = { maxNodes: q.maxNodes, maxPerNode: q.maxPerNode, maxProbes: q.maxProbes };
     if (state.selected.size > q.maxNodes) {
       state.selected = new Set([...state.selected].slice(0, q.maxNodes));
       syncChips();
@@ -413,7 +454,7 @@ async function submit(event) {
         type: $("type").value,
         target,
         nodes: [...state.selected],
-        perNode: PER_NODE,
+        perNode: probesPerNode(state.selected.size),
         ...($("type").value === "dns" ? { queryType: $("qtype").value } : {}),
       }),
     });

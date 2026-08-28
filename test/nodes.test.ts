@@ -2,6 +2,8 @@ import { HTTPException } from "hono/http-exception";
 import { describe, expect, it } from "vitest";
 import type { AtlasClient } from "../src/atlas";
 import {
+  MAX_NODES,
+  MAX_PROBES_PER_NODE,
   MAX_TOTAL_PROBES,
   NODE_PRESETS,
   SEED_NODES,
@@ -150,10 +152,20 @@ describe("resolveNodes", () => {
 
   it("caps the total probe count a single request can buy", async () => {
     const { client } = fakeClient(pool);
-    const many = Array.from({ length: 25 }, (_, i) => `de-${3320 + i}`);
-    await expect(resolveNodes(client, many, 3, 4)).rejects.toThrow(
-      new RegExp(`exceeds cap of ${MAX_TOTAL_PROBES}`),
-    );
+    // The binding limit is the caller's tier, not the hard rail: MAX_NODES x
+    // MAX_PROBES_PER_NODE equals MAX_TOTAL_PROBES by construction, so the rail
+    // alone can never be crossed. The anonymous ceiling is 50.
+    const many = Array.from({ length: 30 }, (_, i) => `de-${3320 + i}`);
+    await expect(resolveNodes(client, many, 3, 4, 50)).rejects.toThrow(/exceeds cap of 50/);
+    // Same nodes, one probe each, fits.
+    await expect(resolveNodes(client, many, 1, 4, 50)).resolves.toBeTruthy();
+  });
+
+  it("never lets a tier buy more than the hard rail, however generous", async () => {
+    const { client } = fakeClient(pool);
+    const many = Array.from({ length: 50 }, (_, i) => `de-${3320 + i}`);
+    await expect(resolveNodes(client, many, 3, 4, 10_000)).resolves.toBeTruthy();
+    expect(MAX_NODES * MAX_PROBES_PER_NODE).toBeLessThanOrEqual(MAX_TOTAL_PROBES);
   });
 
   it("gives up with 503, not a mystery, when nothing at all is connected", async () => {

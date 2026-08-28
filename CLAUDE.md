@@ -61,6 +61,16 @@ buckets, the credit ledger, and the node-catalogue cache.
 A node id is `cc-asn` (`cn-4134` = 中国·电信) and is **self-describing**, so
 selection never depends on the catalogue — any well-formed pair works.
 
+**A node id carries one ASN, and it is the v4 one.** For an `af: 6` request on
+a node the catalogue never saw, `resolveNodes` does *not* assume the v6 ASN
+matches: it queries by the v4 ASN and keeps the probes on the **dominant** v6
+ASN among them — the same rule the catalogue applies when it records a group's
+`asnV6`. Assuming they matched made every asymmetric operator look empty over
+IPv6: `de-8899` reported 0 probes where it has 37. Taking *all* v6-capable
+probes instead would be worse — a probe can reach IPv6 through a tunnel broker
+on an unrelated AS, and that measures Hurricane Electric's path while claiming
+the operator's.
+
 **Do not use Atlas `{type:"asn"}` selection.** ASN selection is *global*:
 AS16509 (AWS) has ~100 connected probes across 25 countries, only 8% in Hong
 Kong, so "香港 · AWS" would silently probe from Virginia. `resolveNodes()` in
@@ -234,6 +244,17 @@ key or IP is ever stored — never the value.
 `DailyBudget` reconciles against Atlas's own `past_day_credits_spent` every 10
 minutes and gates on `max(local ledger, Atlas)`. That way a wrong cost estimate
 — or the account being spent elsewhere — cannot quietly drain it.
+
+**`maxProbes` is the limit that binds, not `maxNodes`.** Nodes alone do not
+bound cost: 50 nodes at two probes each is 100 probes. Anonymous callers get
+`maxNodes: 50` and `maxProbes: 50`, so a full-width selection runs at one probe
+per node and fewer nodes buy depth instead; the console's `probesPerNode()`
+does that arithmetic client-side rather than letting the server reject the
+request. BYOK gets the same breadth — `maxNodes` is the structural rail
+`MAX_NODES`, not a pricing lever, because they spend their own credits — and
+three times the depth. `MAX_NODES × MAX_PROBES_PER_NODE` equals
+`MAX_TOTAL_PROBES` by construction, so the hard rail can never be crossed on
+its own; it exists to bound the work one request makes the Worker do.
 
 429/503 responses carry `Retry-After` and the remaining allowance. They are
 thrown as `QuotaError` (which carries its own `Response`), because Hono's
