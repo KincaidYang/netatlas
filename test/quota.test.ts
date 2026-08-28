@@ -39,11 +39,17 @@ describe("credit estimation", () => {
   });
 
   it("keeps the worst anonymous request affordable against the daily pot", () => {
-    // The expensive corner: traceroute, every node the tier allows, filled.
-    const { maxNodes, maxPerNode, dailyCredits } = QUOTA.anon;
-    const worst = PRICES.traceroute * maxNodes * maxPerNode;
-    expect(worst).toBe(600);
+    // The expensive corner: traceroute, every probe the tier allows. Note that
+    // maxNodes x maxPerNode is *not* the answer — maxProbes binds first, which
+    // is the whole reason it exists: 50 nodes at two probes each would be 100.
+    const { maxNodes, maxPerNode, maxProbes, dailyCredits } = QUOTA.anon;
+    const probes = Math.min(maxNodes * maxPerNode, maxProbes);
+    const worst = PRICES.traceroute * probes;
+    expect(probes).toBe(50);
+    expect(worst).toBe(1500);
     expect(worst).toBeLessThanOrEqual(dailyCredits);
+    // The public pot absorbs a good number of worst-case requests, not three.
+    expect(Math.floor(DEFAULT_PUBLIC_DAILY_CREDITS / worst)).toBeGreaterThanOrEqual(50);
     // …and one caller draining their whole day must not drain the public pot.
     expect(dailyCredits * 10).toBeLessThanOrEqual(DEFAULT_PUBLIC_DAILY_CREDITS);
   });
@@ -64,8 +70,19 @@ describe("tier policy", () => {
     }
   });
 
+  it("lets a full anonymous selection through at one probe per node", () => {
+    // The console offers every node up to maxNodes; if a full selection could
+    // not be submitted at all, the limit would be a lie.
+    expect(QUOTA.anon.maxNodes).toBeLessThanOrEqual(QUOTA.anon.maxProbes);
+  });
+
   it("is looser for callers spending their own credits", () => {
-    expect(QUOTA.byok.maxNodes).toBeGreaterThan(QUOTA.anon.maxNodes);
+    // Breadth is deliberately equal: maxNodes is the structural rail
+    // (MAX_NODES), not a pricing lever — a BYOK caller pays their own credits.
+    // The looseness is in depth and in the buckets.
+    expect(QUOTA.byok.maxNodes).toBeGreaterThanOrEqual(QUOTA.anon.maxNodes);
+    expect(QUOTA.byok.maxProbes).toBeGreaterThan(QUOTA.anon.maxProbes);
+    expect(QUOTA.byok.maxPerNode).toBeGreaterThan(QUOTA.anon.maxPerNode);
     expect(QUOTA.byok.job.capacity).toBeGreaterThan(QUOTA.anon.job.capacity);
     expect(QUOTA.byok.job.refillSeconds).toBeLessThan(QUOTA.anon.job.refillSeconds);
     expect(QUOTA.byok.countsAgainstGlobalBudget).toBe(false);

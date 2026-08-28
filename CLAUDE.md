@@ -61,20 +61,95 @@ buckets, the credit ledger, and the node-catalogue cache.
 A node id is `cc-asn` (`cn-4134` = 中国·电信) and is **self-describing**, so
 selection never depends on the catalogue — any well-formed pair works.
 
+**A node id carries one ASN, and it is the v4 one.** For an `af: 6` request on
+a node the catalogue never saw, `resolveNodes` does *not* assume the v6 ASN
+matches: it queries by the v4 ASN and keeps the probes on the **dominant** v6
+ASN among them — the same rule the catalogue applies when it records a group's
+`asnV6`. Assuming they matched made every asymmetric operator look empty over
+IPv6: `de-8899` reported 0 probes where it has 37. Taking *all* v6-capable
+probes instead would be worse — a probe can reach IPv6 through a tunnel broker
+on an unrelated AS, and that measures Hurricane Electric's path while claiming
+the operator's.
+
 **Do not use Atlas `{type:"asn"}` selection.** ASN selection is *global*:
 AS16509 (AWS) has ~100 connected probes across 25 countries, only 8% in Hong
 Kong, so "香港 · AWS" would silently probe from Virginia. `resolveNodes()` in
 `src/nodes.ts` resolves nodes to **explicit probe ids** at request time, live
 against `status=1`, then emits one `{type:"probes"}` group per node.
 
-- `data/nodes.json` is a **cold-start seed only** (242 nodes / 125 countries,
+- `data/nodes.json` is a **cold-start seed only** (242 nodes / 126 countries,
   62 marked `featured`). Regenerate with `npm run nodes:refresh`.
+- **The catalogue is a curated view, not the universe.** Atlas has connected
+  probes in ~5,000 country×operator pairs; the catalogue offers ~240 of them.
+  The rest are reachable through `GET /nodes?q=<query>`, which searches every
+  stored pair — by id, bare ASN, country name or code, or operator name. This
+  works only because a node id is self-describing: a hit is measurable even
+  though the catalogue never listed it.
+- **Two thirds of those pairs have exactly one probe.** They are offered and
+  marked (dimmed chip, red count), never hidden — a single probe can go offline
+  between the sweep and the measurement, and `0/1` is a fact the reader can act
+  on where a missing node is not.
+- Most of the 4,398 ASNs have **no resolved holder name** — `resolveNames`
+  looks up 25 new ones per sweep — so they read as `AS12345` and only the ASN
+  or country will find them. The console says so on an empty result; do not
+  "fix" this by naming thousands of ASNs on every sweep.
+- The full pair set does not fit one Durable Object value (~130 KB against a
+  128 KiB limit), so `CatalogCache` stores it in `groups:<n>` **shards**. The
+  resolved ASN names are sharded the same way and, more importantly, **pruned
+  to the ASNs the current groups reference**: 25 new holders per sweep with
+  nothing ever removed crosses the same limit somewhere past 5,000 entries —
+  about a month after deploy — and that `put` throwing before `refreshedAt`
+  advances leaves the catalogue permanently stale, so every page load fires
+  another 30-request sweep at Atlas. Writing names is also wrapped in its own
+  try/catch for the same reason: a name is cosmetic, a stuck refresh is not.
+  A pre-sharding deployment's single `counts` / `names` keys are still read as
+  a fallback and deliberately left in place, so a rollback degrades instead of
+  falling back to the committed seed.
+- The continent for a country lives in **one table**, in
+  `scripts/build-nodes.mjs`, baked into `data/nodes.json` as `continents`. The
+  runtime needs it because a sweep finds pairs the build never saw; without the
+  baked map they rendered under `??`. It covers all 249 ISO codes on purpose —
+  a continent with no nodes simply does not render.
 - At runtime the `CatalogCache` DO re-sweeps Atlas on a 3h TTL. A page load
   *triggers* a refresh but never waits for one — a sweep is 30 requests /
   ~1 MB / ~5s, which is fine every few hours and abusive on every page load.
 - Probe counts in the catalogue are a **display and query-planning hint**,
   never truth. Truth is the `available` / `unavailable` fields returned by a
-  real request.
+  real request, and `available` is the *complete* live pool — the lookup pages
+  to the end rather than stopping once it has enough, because a number
+  documented as a pool size must not quietly become a lower bound.
+- **Plan the lookups from live counts.** `resolveNodes` takes a `sizes` map
+  (`liveSizes()` in `src/routes/probe.ts` reads it from the `CatalogCache` DO)
+  and uses it only to decide how many nodes go in one Atlas query. Guessing 50
+  probes for an uncatalogued node was fine until search made them selectable in
+  bulk: `de-3209` really has 190, so a batch nominally inside the 400 budget
+  matched past Atlas's 500-per-page cap, and the overflow silently dropped
+  whichever nodes sorted last — they came back `unavailable` moments after
+  search had reported their probes. Pagination is still there as a rail (four
+  pages), but with real sizes it rarely fires. If the DO is unreachable the
+  guess returns and the rail catches it. Sizes come from the `is_public=true`
+  sweep while the lookup does not filter on it, so they *understate* the pool —
+  which now costs an extra page and nothing else, because reads run to the end.
+- **Reads page until Atlas returns a short page**, never to a page budget. The
+  first version of this capped at four pages, which repeated the mistake it was
+  fixing: returning the first 2,000 of a larger pool while calling `available`
+  complete. `MAX_PAGES` is a runaway guard against a misbehaving API, not a
+  budget — the largest country×operator group in Atlas holds 309 probes, so a
+  single node has never needed a second page.
+- **A group is keyed by the probe's v4 ASN, never falling back to its v6 one.**
+  188 connected probes are IPv6-only, and keying those by their v6 ASN invented
+  61 groups that resolve to nothing (search offered them; selecting one always
+  returned `unavailable`) and credited 80 real nodes with IPv4 probes that have
+  no IPv4 — KPN uses 1136 for both families, so `nl-1136` counted them, and
+  `de-3320` advertised 316 where it has 310. Those probes stay reachable for
+  `af: 6` on a catalogued node, which queries by v6 ASN and never reads these
+  counts. Both sweeps do this; `scripts/build-nodes.mjs` and `src/catalog.ts`
+  must agree.
+- **A batch that fails mid-pagination is retried from page one**, so probes
+  already collected arrive a second time. Pools are deduplicated before they
+  are counted or sampled — otherwise `available` inflates (600 reported as
+  1,100) and `shuffle().slice()` can hand Atlas the same probe id twice inside
+  one group.
 
 ## Where the city name comes from
 
@@ -211,6 +286,17 @@ key or IP is ever stored — never the value.
 minutes and gates on `max(local ledger, Atlas)`. That way a wrong cost estimate
 — or the account being spent elsewhere — cannot quietly drain it.
 
+**`maxProbes` is the limit that binds, not `maxNodes`.** Nodes alone do not
+bound cost: 50 nodes at two probes each is 100 probes. Anonymous callers get
+`maxNodes: 50` and `maxProbes: 50`, so a full-width selection runs at one probe
+per node and fewer nodes buy depth instead; the console's `probesPerNode()`
+does that arithmetic client-side rather than letting the server reject the
+request. BYOK gets the same breadth — `maxNodes` is the structural rail
+`MAX_NODES`, not a pricing lever, because they spend their own credits — and
+three times the depth. `MAX_NODES × MAX_PROBES_PER_NODE` equals
+`MAX_TOTAL_PROBES` by construction, so the hard rail can never be crossed on
+its own; it exists to bound the work one request makes the Worker do.
+
 429/503 responses carry `Retry-After` and the remaining allowance. They are
 thrown as `QuotaError` (which carries its own `Response`), because Hono's
 `HTTPException` loses a custom response when the error handler re-serialises it.
@@ -230,7 +316,7 @@ src/index.ts           route assembly, error handling, DO exports
 src/routes/probe.ts    create + results + the quota chain, in that order
 src/routes/meta.ts     nodes / presets / types / anchors / quota
 src/measurements/      one file per type + the MeasurementKind contract
-src/nodes.ts           catalogue access, node→probe resolution, presets
+src/nodes.ts           catalogue access, node→probe resolution, presets, search
 src/catalog.ts         CatalogCache DO — TTL sweep of live probe counts
 src/quota.ts           every limit, in one place
 src/gate.ts            identity (anon vs BYOK), quota checks, QuotaError

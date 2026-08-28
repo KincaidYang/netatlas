@@ -126,14 +126,25 @@ const CN_NAMES = {
   GG: "根西岛", AX: "奥兰群岛", ME: "黑山",
 };
 
+/**
+ * Every ISO 3166-1 alpha-2 code, so nothing Atlas can report falls into "??".
+ * Antarctica has no connected probe today and several of these territories
+ * never will — a continent with no nodes simply does not render, so listing
+ * them costs nothing and stops a surprise from landing nowhere.
+ *
+ * Atlas's own `?` placeholder for an unplaced probe is deliberately absent: it
+ * is not a country and should not be filed as one.
+ */
 const CONTINENT = {
-  "亚洲": "CN HK TW MO JP KR SG MY TH VN ID PH IN PK BD LK NP AE SA IL TR QA KW OM JO LB IQ IR KZ UZ GE AM AZ MN KH LA MM BN BT MV AF BH KG PS SY TJ TL YE TM",
-  "欧洲": "GB DE FR NL IT ES SE NO FI DK PL CH AT BE CZ PT IE GR RO HU BG RS SK SI HR LT LV EE LU IS MD BY UA RU MT CY AL MK BA ME MC LI AD SM FO GI JE IM GG AX",
-  "北美": "US CA MX GT CR PA CU DO JM HT HN NI SV BZ BS TT BB PR VI GL BM KY AW CW",
-  "南美": "BR AR CL CO PE UY VE EC BO PY GY SR GF",
-  "非洲": "ZA EG NG KE MA TN GH DZ ET UG TZ SN CI CM ZW ZM MU RW AO MZ BW NA LY SD SC MG BJ ML BF NE TG GA CG CD GN LR SL GM CV DJ RE TD SO SS MW LS SZ ER KM",
-  "大洋洲": "AU NZ FJ PG NC PF GU WS VU SB TO FM KI NR TV PW MH CK",
+  "亚洲": "CN HK TW MO JP KR SG MY TH VN ID PH IN PK BD LK NP AE SA IL TR QA KW OM JO LB IQ IR KZ UZ GE AM AZ MN KH LA MM BN BT MV AF BH KG PS SY TJ TL YE TM KP IO",
+  "欧洲": "GB DE FR NL IT ES SE NO FI DK PL CH AT BE CZ PT IE GR RO HU BG RS SK SI HR LT LV EE LU IS MD BY UA RU MT CY AL MK BA ME MC LI AD SM FO GI JE IM GG AX VA SJ",
+  "北美": "US CA MX GT CR PA CU DO JM HT HN NI SV BZ BS TT BB PR VI GL BM KY AW CW AG AI BL BQ DM GD GP KN LC MF MQ MS PM SX TC VC VG UM",
+  "南美": "BR AR CL CO PE UY VE EC BO PY GY SR GF FK GS",
+  "非洲": "ZA EG NG KE MA TN GH DZ ET UG TZ SN CI CM ZW ZM MU RW AO MZ BW NA LY SD SC MG BJ ML BF NE TG GA CG CD GN LR SL GM CV DJ RE TD SO SS MW LS SZ ER KM BI CF EH GQ GW SH ST MR YT",
+  "大洋洲": "AU NZ FJ PG NC PF GU WS VU SB TO FM KI NR TV PW MH CK AS CC CX MP NF NU PN TK WF",
+  "南极洲": "AQ BV HM TF",
 };
+
 
 const continentOf = (cc) => {
   for (const [k, v] of Object.entries(CONTINENT)) if (v.split(" ").includes(cc)) return k;
@@ -170,16 +181,33 @@ function cleanHolder(raw) {
  * whatever is actually in the catalogue. Hand-written node ids rot the moment
  * an operator's probe count moves; country intent does not.
  */
+/**
+ * One preset per continent, plus 全球 and 中国. The old 亚太 / 美洲 groupings
+ * were a different granularity from the chip sections right below them, which
+ * made the two rows disagree about what a region is.
+ *
+ * 中国 is CN/HK/MO/TW in one preset — there is no separate 大陆 selection.
+ */
 const PRESET_COUNTRIES = {
   global: ["US", "DE", "GB", "JP", "SG", "CN", "BR", "AU", "IN", "ZA"],
-  china: ["CN"],
-  greater_china: ["CN", "HK", "TW"],
-  apac: ["JP", "SG", "HK", "TW", "KR", "AU", "IN", "ID"],
+  china: ["CN", "HK", "MO", "TW"],
+  asia: ["JP", "KR", "SG", "HK", "TW", "IN", "ID", "TH", "VN", "AE"],
   europe: ["DE", "GB", "FR", "NL", "SE", "IT", "ES", "PL"],
-  americas: ["US", "CA", "BR", "MX", "AR", "CL"],
+  north_america: ["US", "CA", "MX"],
+  south_america: ["BR", "AR", "CL", "CO", "PE"],
+  africa: ["ZA", "EG", "NG", "KE", "TN"],
+  oceania: ["AU", "NZ"],
 };
-/** How many nodes to take per country in a preset. */
-const PRESET_PER_COUNTRY = { china: 6, greater_china: 2 };
+/**
+ * How many nodes to take per country. China gets depth because it is the
+ * audience and has few operators; everywhere else one carrier per country is
+ * the point of a preset.
+ *
+ * Three, not more: CN/HK/MO/TW at four apiece is twelve nodes, over the
+ * anonymous tier's ceiling of ten, so `preset=china` would 400 for exactly the
+ * callers most likely to use it.
+ */
+const PRESET_PER_COUNTRY = { china: 3 };
 
 function buildPresets(nodes) {
   const byCc = new Map();
@@ -255,7 +283,11 @@ const main = async () => {
   const groups = new Map();
   for (const p of probes) {
     const cc = p.country_code;
-    const asn = p.asn_v4 ?? p.asn_v6;
+    // Keyed by the v4 ASN only: a node id is `cc-<v4 ASN>`, so an IPv6-only
+    // probe (188 of them are) cannot be addressed by one. Falling back to the
+    // v6 ASN invented groups that resolve to nothing and inflated the IPv4
+    // count of any node that happens to share the number.
+    const asn = p.asn_v4;
     if (!cc || !asn) continue;
     const id = `${cc.toLowerCase()}-${asn}`;
     let g = groups.get(id);
@@ -351,6 +383,12 @@ const main = async () => {
       cloud: [...CLOUD],
     },
     countries: CN_NAMES,
+    // The runtime catalogue sweep discovers (cc, ASN) pairs this build never
+    // saw, and it has no continent table of its own — without this map every
+    // newly-found node renders under "??".
+    continents: Object.fromEntries(
+      Object.entries(CONTINENT).flatMap(([name, ccs]) => ccs.split(" ").map((cc) => [cc, name])),
+    ),
     operators: LABELS,
     presets: buildPresets(nodes),
     nodes,

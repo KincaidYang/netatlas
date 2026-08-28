@@ -2,14 +2,20 @@ import { HTTPException } from "hono/http-exception";
 import { describe, expect, it } from "vitest";
 import type { AtlasClient } from "../src/atlas";
 import {
+  MAX_NODES,
+  MAX_PROBES_PER_NODE,
   MAX_TOTAL_PROBES,
   NODE_PRESETS,
   SEED_NODES,
   labelForId,
+  matchesQuery,
   nodeKeyFor,
   parseNodeId,
+  presetNodes,
+  searchNodes,
   requestedFromProbeIds,
   resolveNodes,
+  type Node,
 } from "../src/nodes";
 import type { ProbeMeta } from "../src/types";
 
@@ -146,10 +152,20 @@ describe("resolveNodes", () => {
 
   it("caps the total probe count a single request can buy", async () => {
     const { client } = fakeClient(pool);
-    const many = Array.from({ length: 25 }, (_, i) => `de-${3320 + i}`);
-    await expect(resolveNodes(client, many, 3, 4)).rejects.toThrow(
-      new RegExp(`exceeds cap of ${MAX_TOTAL_PROBES}`),
-    );
+    // The binding limit is the caller's tier, not the hard rail: MAX_NODES x
+    // MAX_PROBES_PER_NODE equals MAX_TOTAL_PROBES by construction, so the rail
+    // alone can never be crossed. The anonymous ceiling is 50.
+    const many = Array.from({ length: 30 }, (_, i) => `de-${3320 + i}`);
+    await expect(resolveNodes(client, many, 3, 4, 50)).rejects.toThrow(/exceeds cap of 50/);
+    // Same nodes, one probe each, fits.
+    await expect(resolveNodes(client, many, 1, 4, 50)).resolves.toBeTruthy();
+  });
+
+  it("never lets a tier buy more than the hard rail, however generous", async () => {
+    const { client } = fakeClient(pool);
+    const many = Array.from({ length: 50 }, (_, i) => `de-${3320 + i}`);
+    await expect(resolveNodes(client, many, 3, 4, 10_000)).resolves.toBeTruthy();
+    expect(MAX_NODES * MAX_PROBES_PER_NODE).toBeLessThanOrEqual(MAX_TOTAL_PROBES);
   });
 
   it("gives up with 503, not a mystery, when nothing at all is connected", async () => {
@@ -180,5 +196,275 @@ describe("catalogue seed", () => {
     for (const n of SEED_NODES) {
       expect(parseNodeId(n.id), n.id).toEqual({ cc: n.cc.toUpperCase(), asn: n.asn });
     }
+  });
+});
+
+describe("presetNodes", () => {
+  it("resolves the continent presets the console shows", () => {
+    for (const name of ["global", "china", "asia", "europe", "north_america", "south_america", "africa", "oceania"]) {
+      expect(presetNodes(name)?.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps retired preset names working for API callers", () => {
+    // The console dropped 大中华 / 亚太 / 美洲, but this is a no-login public
+    // API and someone's script may already send them. 400 there costs a
+    // working tool to save us a map.
+    expect(presetNodes("greater_china")).toEqual(presetNodes("china"));
+    expect(presetNodes("apac")).toEqual(presetNodes("asia"));
+    expect(presetNodes("americas")).toEqual([
+      ...(presetNodes("north_america") ?? []),
+      ...(presetNodes("south_america") ?? []),
+    ]);
+  });
+
+  it("does not advertise the aliases", () => {
+    // GET /presets returns NODE_PRESETS directly, so an alias listed there
+    // would render as a duplicate button in the console.
+    expect(Object.keys(NODE_PRESETS)).not.toContain("greater_china");
+    expect(Object.keys(NODE_PRESETS)).not.toContain("apac");
+  });
+
+  it("returns null for a name that never existed", () => {
+    expect(presetNodes("atlantis")).toBeNull();
+  });
+
+  it("keeps every preset inside the anonymous node ceiling", () => {
+    // A preset larger than QUOTA.anon.maxNodes 400s for exactly the callers
+    // most likely to use one.
+    for (const [name, ids] of Object.entries(NODE_PRESETS)) {
+      expect(ids.length, `preset ${name}`).toBeLessThanOrEqual(10);
+    }
+  });
+});
+
+describe("node search", () => {
+  const node = (id: string, label: string, probes: number, holder: string | null = null): Node => {
+    const [cc, asn] = id.split("-");
+    return { id, cc: cc.toUpperCase(), asn: Number(asn), asnV6: null, label, holder, continent: "亚洲", probes, probesV6: 0 };
+  };
+  const pool = [
+    node("cn-4134", "中国 · 电信", 12),
+    node("tw-3462", "台湾 · 中华电信", 34),
+    node("mn-10219", "蒙古 · AS10219", 1),
+    node("de-3320", "德国 · Deutsche Telekom", 171, "Deutsche Telekom"),
+  ];
+
+  it("finds a node by id, by bare ASN, and by ASN with the prefix", () => {
+    expect(searchNodes(pool, "cn-4134", 10).map((n) => n.id)).toEqual(["cn-4134"]);
+    expect(searchNodes(pool, "10219", 10).map((n) => n.id)).toEqual(["mn-10219"]);
+    expect(searchNodes(pool, "AS10219", 10).map((n) => n.id)).toEqual(["mn-10219"]);
+  });
+
+  it("finds a node by country name and by country code", () => {
+    expect(searchNodes(pool, "蒙古", 10).map((n) => n.id)).toEqual(["mn-10219"]);
+    expect(searchNodes(pool, "de", 10).map((n) => n.id)).toEqual(["de-3320"]);
+  });
+
+  it("finds a node by operator name, in either language", () => {
+    expect(searchNodes(pool, "电信", 10).map((n) => n.id)).toEqual(["tw-3462", "cn-4134"]);
+    expect(searchNodes(pool, "deutsche", 10).map((n) => n.id)).toEqual(["de-3320"]);
+  });
+
+  it("ranks by probe count, because one probe is the least useful answer", () => {
+    expect(searchNodes(pool, "电信", 10).map((n) => n.probes)).toEqual([34, 12]);
+  });
+
+  it("includes single-probe nodes rather than hiding them", () => {
+    // Two thirds of the ~5,000 pairs Atlas has a probe in have exactly one.
+    // They are marked in the console, not withheld.
+    expect(searchNodes(pool, "蒙古", 10)[0].probes).toBe(1);
+  });
+
+  it("returns nothing for an empty or whitespace query", () => {
+    expect(searchNodes(pool, "", 10)).toEqual([]);
+    expect(searchNodes(pool, "   ", 10)).toEqual([]);
+    expect(matchesQuery(pool[0], "")).toBe(false);
+  });
+
+  it("respects the limit", () => {
+    expect(searchNodes(pool, "e", 2).length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("paginated probe lookup", () => {
+  /** A client whose pages are capped at 500, the way Atlas actually behaves. */
+  const pagedClient = (probes: ProbeMeta[]) => {
+    const pages: number[] = [];
+    const client = {
+      findProbes: async (q: { asns?: number[]; page?: number }) => {
+        const page = q.page ?? 1;
+        pages.push(page);
+        const matching = probes.filter((p) => q.asns?.includes(p.asn_v4 ?? 0));
+        return matching.slice((page - 1) * 500, page * 500);
+      },
+    } as unknown as AtlasClient;
+    return { client, pages };
+  };
+
+  const many = (asn: number, n: number, from: number): ProbeMeta[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: from + i,
+      country_code: "DE",
+      asn_v4: asn,
+      asn_v6: asn,
+      status: 1,
+    }));
+
+  it("keeps looking past the first page when a batch overflows it", async () => {
+    // 600 probes on the first ASN would fill page one entirely, leaving the
+    // second ASN invisible and wrongly reported as having nothing.
+    const { client, pages } = pagedClient([...many(3320, 600, 1), ...many(3209, 40, 1000)]);
+    const out = await resolveNodes(client, ["de-3320", "de-3209"], 3, 4, 50);
+    expect(out.unavailable).toEqual([]);
+    expect(out.requested["de-3209"]).toBe(3);
+    expect(pages.length).toBeGreaterThan(1);
+  });
+
+  it("pages until Atlas says it is done, not until a page budget runs out", async () => {
+    // 2,500 probes is five full pages. A four-page cap would have returned
+    // 2,000 of them and called `available` complete, which is the same quiet
+    // overstatement the pagination fix existed to remove.
+    const { client, pages } = pagedClient(many(3320, 2500, 1));
+    const out = await resolveNodes(client, ["de-3320"], 1, 4, 50);
+    expect(out.available["de-3320"]).toBe(2500);
+    expect(pages).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("reports the real pool size, not just enough of it", async () => {
+    // One probe is all the request needs, but `available` is documented as the
+    // live pool size — stopping at the first page would quietly make it a
+    // lower bound (1,200 reported as 500).
+    const { client, pages } = pagedClient(many(3320, 1200, 1));
+    const out = await resolveNodes(client, ["de-3320"], 1, 4, 50);
+    expect(out.available["de-3320"]).toBe(1200);
+    expect(pages).toEqual([1, 2, 3]);
+  });
+
+  it("plans batches from live counts so one page usually suffices", async () => {
+    // Without sizes both nodes are guessed at 50, land in one batch, and their
+    // real 900 probes overflow the page. With the live counts the planner puts
+    // them in separate lookups and each fits.
+    const probes = [...many(3320, 600, 1), ...many(3209, 300, 5000)];
+    const guessed = pagedClient(probes);
+    await resolveNodes(guessed.client, ["de-3320", "de-3209"], 1, 4, 50);
+    expect(guessed.pages.length).toBeGreaterThan(1);
+
+    const planned = pagedClient(probes);
+    const out = await resolveNodes(planned.client, ["de-3320", "de-3209"], 1, 4, 50, {
+      "de-3320": 600,
+      "de-3209": 300,
+    });
+    expect(out.available).toEqual({ "de-3320": 600, "de-3209": 300 });
+  });
+
+  it("stops on a short page rather than asking for one that cannot exist", async () => {
+    const { client, pages } = pagedClient(many(3320, 10, 1));
+    await resolveNodes(client, ["de-3320"], 3, 4, 50);
+    expect(pages).toEqual([1]);
+  });
+});
+
+describe("retry after a partial page failure", () => {
+  /** Succeeds on page one, throws on page two, succeeds when asked alone. */
+  const flakyClient = (probes: ProbeMeta[]) => {
+    let batchCalls = 0;
+    const client = {
+      findProbes: async (q: { asns?: number[]; page?: number }) => {
+        const page = q.page ?? 1;
+        const multi = (q.asns?.length ?? 0) > 1;
+        if (multi) {
+          batchCalls++;
+          if (page > 1) throw new Error("atlas 500");
+        }
+        const matching = probes.filter((p) => q.asns?.includes(p.asn_v4 ?? 0));
+        return matching.slice((page - 1) * 500, page * 500);
+      },
+    } as unknown as AtlasClient;
+    return { client, calls: () => batchCalls };
+  };
+
+  const many = (asn: number, n: number, from: number): ProbeMeta[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: from + i,
+      country_code: "DE",
+      asn_v4: asn,
+      asn_v6: asn,
+      status: 1,
+    }));
+
+  it("does not count the probes it already collected twice", async () => {
+    const { client } = flakyClient([...many(3320, 600, 1), ...many(3209, 40, 5000)]);
+    const out = await resolveNodes(client, ["de-3320", "de-3209"], 3, 4, 50);
+    // Page one of the failed batch already delivered these; the per-node retry
+    // starts again from page one and delivers them a second time.
+    expect(out.available["de-3320"]).toBe(600);
+    expect(out.available["de-3209"]).toBe(40);
+  });
+
+  it("never hands Atlas the same probe twice in one group", async () => {
+    // The lone probe has to sort *inside* the first page, or the retry is its
+    // first sighting and nothing is duplicated. With one probe and a request
+    // for three, a repeated entry is then certain rather than a lucky shuffle.
+    const { client } = flakyClient([...many(3209, 1, 5000), ...many(3320, 600, 1)]);
+    const out = await resolveNodes(client, ["de-3320", "de-3209"], 3, 4, 50);
+    const lone = out.probes.find((g) => String(g.value).includes("5000"));
+    expect(lone?.value).toBe("5000");
+    expect(out.requested["de-3209"]).toBe(1);
+    for (const group of out.probes) {
+      const ids = String(group.value).split(",");
+      expect(new Set(ids).size).toBe(ids.length);
+    }
+  });
+});
+
+describe("IPv6 ASN vote across pages", () => {
+  const pagedClient = (probes: ProbeMeta[]) => {
+    const client = {
+      findProbes: async (q: { asns?: number[]; af?: 4 | 6; page?: number }) => {
+        const page = q.page ?? 1;
+        const key = q.af === 6 ? "asn_v6" : "asn_v4";
+        const matching = probes.filter((p) => q.asns?.includes((p as never)[key] ?? 0));
+        return matching.slice((page - 1) * 500, page * 500);
+      },
+    } as unknown as AtlasClient;
+    return { client };
+  };
+
+  /** An uncatalogued operator whose IPv6 rides a second ASN. */
+  const probe = (id: number, v6: number): ProbeMeta => ({
+    id,
+    country_code: "DE",
+    asn_v4: 65001,
+    asn_v6: v6,
+    status: 1,
+  });
+
+  it("counts the whole pool, not just the first page, when picking the v6 ASN", async () => {
+    // Page one alone says 65010 wins 300 to 200. The rest of the pool turns it
+    // round: 65011 has 350 in total. A vote on one page picks the loser and
+    // then selects probes on the wrong network.
+    const page1 = [
+      ...Array.from({ length: 300 }, (_, i) => probe(i + 1, 65010)),
+      ...Array.from({ length: 200 }, (_, i) => probe(i + 1000, 65011)),
+    ];
+    const page2 = Array.from({ length: 150 }, (_, i) => probe(i + 2000, 65011));
+    const { client } = pagedClient([...page1, ...page2]);
+
+    const out = await resolveNodes(client, ["de-65001"], 1, 6, 50);
+    expect(out.available["de-65001"]).toBe(350);
+  });
+
+  it("never mixes two IPv6 ASNs into one node's selection", async () => {
+    const mixed = [
+      ...Array.from({ length: 5 }, (_, i) => probe(i + 1, 65010)),
+      ...Array.from({ length: 40 }, (_, i) => probe(i + 100, 65011)),
+    ];
+    const { client } = pagedClient(mixed);
+    const out = await resolveNodes(client, ["de-65001"], 3, 6, 50);
+    const chosen = String(out.probes[0].value).split(",").map(Number);
+    // Every selected probe must belong to the winning ASN — a tunnel broker's
+    // AS is a different network, whatever the node label claims.
+    expect(chosen.every((id) => id >= 100)).toBe(true);
   });
 });

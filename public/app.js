@@ -3,7 +3,15 @@
 /* netatlas console — no build step, no framework. */
 
 const API = "/api/v1";
+/** Probes per node when the selection is small enough to afford them. */
 const PER_NODE = 2;
+
+/**
+ * What to assume before /quota answers, and whenever the answer is in doubt.
+ * Too small only trims a selection; too large invites a 400 the caller cannot
+ * see coming, or a bill twice the one displayed.
+ */
+const CAUTIOUS_LIMITS = { maxNodes: 8, maxPerNode: 2, maxProbes: 16 };
 const POLL_MS = 3000;
 /** Ceiling once results stop arriving; see load(). */
 const POLL_MAX_MS = 20000;
@@ -35,12 +43,13 @@ const age = (sec) => {
 const state = {
   types: [],
   nodes: [],
+  known: new Map(),
   presets: {},
   /** The result currently on screen, if any. */
   report: null,
   /** Whether the result on screen is still being refreshed. */
   polling: false,
-  limits: { maxNodes: 8, maxPerNode: 2 },
+  limits: { ...CAUTIOUS_LIMITS },
   selected: new Set(),
   showingAll: false,
   timer: null,
@@ -72,6 +81,10 @@ async function init() {
   $("apikey").value = localStorage.getItem("atlasKey") || "";
   $("apikey").addEventListener("change", () => {
     localStorage.setItem("atlasKey", apiKey());
+    // Drop to the conservative floor *now*. Until /quota answers we do not know
+    // which tier this key buys, and holding the old tier's allowance would let
+    // the console promise something the server is about to refuse.
+    state.limits = { ...CAUTIOUS_LIMITS };
     refreshQuota();
   });
 
@@ -82,6 +95,7 @@ async function init() {
   ]);
   state.types = types;
   state.nodes = nodes.nodes;
+  remember(nodes.nodes);
   state.totalNodes = nodes.totalCount;
   state.presets = presets;
 
@@ -95,6 +109,7 @@ async function init() {
   $("more").textContent = `展开全部 ${nodes.totalCount} 个节点`;
   renderRegions();
   renderPresets();
+  wireSearch();
   await refreshQuota();
   applyPreset("global");
   document.querySelector('[data-preset="global"]')?.setAttribute("aria-pressed", "true");
@@ -130,6 +145,33 @@ function syncFormTo(report) {
   if (!$("target").value) $("target").value = String(report.target ?? "").replace(/\.$/, "");
 }
 
+/**
+ * One selectable node. A node with a single probe is dimmed and its count
+ * reddened rather than hidden: search reaches every country×operator pair
+ * Atlas has a probe in, and about two thirds of those have exactly one. It can
+ * still answer, and when it does not the result says 0/1 — which is a fact the
+ * reader can act on. Hiding them would make "全部在线节点" a lie.
+ */
+/**
+ * Every node the console has seen, by id — from the featured list, the full
+ * catalogue, a preset, or a search hit. `state.nodes` is only ever the page
+ * currently rendered, so without this a node selected from search results
+ * would vanish from the "已选" summary the moment the search box was cleared.
+ */
+function remember(nodes) {
+  for (const n of nodes ?? []) state.known.set(n.id, n);
+}
+
+function nodeChip(n) {
+  const thin = n.probes === 1;
+  const hint = n.probes === 0 ? "当前无在线探针" : thin ? "只有 1 个在线探针，可能不出结果" : `${n.probes} 个在线探针`;
+  return (
+    `<button type="button" class="chip${thin ? " thin" : ""}" data-node="${esc(n.id)}" aria-pressed="false"` +
+    `${n.probes === 0 ? " disabled" : ""} title="${esc(n.id)} · ${esc(hint)}">` +
+    `${esc(n.label)}<span class="n">${n.probes}</span></button>`
+  );
+}
+
 function renderRegions() {
   const byRegion = new Map();
   for (const n of state.nodes) {
@@ -138,17 +180,15 @@ function renderRegions() {
   }
   $("regions").innerHTML = [...byRegion.entries()]
     .map(
-      ([region, list]) => `<div class="region"><h2>${esc(region)}</h2><div class="chips">${list
-        .map(
-          (n) =>
-            `<button type="button" class="chip" data-node="${esc(n.id)}" aria-pressed="false"` +
-            `${n.probes === 0 ? " disabled" : ""} title="${esc(n.id)} · ${n.probes} 个在线探针">` +
-            `${esc(n.label)}<span class="n">${n.probes}</span></button>`,
-        )
-        .join("")}</div></div>`,
+      ([region, list]) =>
+        `<div class="region"><h2>${esc(region)}</h2><div class="chips">${list.map(nodeChip).join("")}</div></div>`,
     )
     .join("");
 
+  bindChips();
+}
+
+function bindChips() {
   for (const chip of document.querySelectorAll("[data-node]")) {
     chip.addEventListener("click", () => {
       const id = chip.dataset.node;
@@ -168,6 +208,76 @@ function renderRegions() {
   syncChips();
 }
 
+/**
+ * Search across every country×operator pair Atlas has a connected probe in —
+ * about 5,000, against the ~240 the catalogue curates. The catalogue exists
+ * because 5,000 chips is not a picker; this is how the rest stay reachable.
+ *
+ * Selection needs nothing from the catalogue: a node id is `cc-asn` and
+ * self-describing, so a pair found here is measurable even though no chip for
+ * it was ever rendered.
+ */
+let searchSeq = 0;
+let searchTimer = null;
+
+function wireSearch() {
+  const input = $("nodesearch");
+  input.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    // A keystroke is not a query. 250 ms is under the threshold where typing
+    // feels laggy and well over the rate at which people type.
+    searchTimer = setTimeout(() => runSearch(input.value), 250);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      input.value = "";
+      runSearch("");
+    }
+  });
+}
+
+async function runSearch(query) {
+  const q = query.trim();
+  const seq = ++searchSeq;
+  if (!q) {
+    $("searchnote").textContent = "";
+    return renderRegions();
+  }
+  $("searchnote").textContent = "搜索中…";
+  try {
+    const data = await api(`/nodes?q=${encodeURIComponent(q)}`);
+    // A slower earlier request must not overwrite a newer one's results.
+    if (seq !== searchSeq) return;
+    renderSearch(data);
+  } catch (err) {
+    if (seq === searchSeq) $("searchnote").textContent = `搜索失败：${err.message}`;
+  }
+}
+
+function renderSearch(data) {
+  const nodes = data.nodes ?? [];
+  if (nodes.length === 0) {
+    $("regions").innerHTML = "";
+    // Most of those ASNs have no resolved holder — the catalogue names a
+    // handful per sweep — so they read as "AS12345" and an operator name will
+    // never find them. Saying so beats letting the reader conclude the node
+    // does not exist.
+    $("searchnote").textContent =
+      `没有匹配的节点（已搜索 ${data.searched ?? 0} 个国家×运营商组合）。` +
+      `多数运营商没有名称、只显示 ASN，可以改用 ASN 或国家名搜索`;
+    return;
+  }
+  remember(nodes);
+  const thin = nodes.filter((n) => n.probes === 1).length;
+  $("regions").innerHTML =
+    `<div class="region"><h2>搜索结果</h2><div class="chips">${nodes.map(nodeChip).join("")}</div></div>`;
+  const shown = data.matched > nodes.length ? `显示前 ${nodes.length} / ${data.matched} 个匹配` : `${nodes.length} 个匹配`;
+  $("searchnote").textContent =
+    `${shown}，来自 RIPE 全部 ${data.searched ?? 0} 个国家×运营商组合` +
+    (thin ? `。其中 ${thin} 个只有 1 个在线探针，可能不出结果` : "");
+  bindChips();
+}
+
 function renderPresets() {
   $("presets").innerHTML = Object.keys(state.presets)
     .map((name) => `<button type="button" class="chip" data-preset="${esc(name)}">${esc(presetLabel(name))}</button>`)
@@ -182,30 +292,70 @@ function renderPresets() {
   }
 }
 
+/**
+ * One per continent, plus 全球 and 中国 — the same regions the chip sections
+ * below use, so the two rows cannot disagree about what a region is. A preset
+ * the catalogue has no nodes for simply does not render.
+ */
 const PRESET_LABELS = {
   global: "全球",
-  china: "中国大陆",
-  greater_china: "大中华",
-  apac: "亚太",
+  china: "中国",
+  asia: "亚洲",
   europe: "欧洲",
-  americas: "美洲",
+  north_america: "北美",
+  south_america: "南美",
+  africa: "非洲",
+  oceania: "大洋洲",
+  antarctica: "南极洲",
 };
 const presetLabel = (name) => PRESET_LABELS[name] || name;
+
+/**
+ * Apply a preset.
+ *
+ * The selection happens **synchronously**, before anything is fetched: a click
+ * must be in effect by the time it returns, or submitting straight afterwards
+ * measures the previous preset, and a second click can be overtaken by the
+ * first one's late response.
+ *
+ * Only the labels are hydrated asynchronously — a preset may name nodes
+ * outside the short featured list (中国 reaches for Hong Kong and Taiwan
+ * carriers that are not in it), and those would otherwise read as bare ids.
+ * That request is guarded by a sequence token so a slow one cannot repaint a
+ * newer preset's summary.
+ */
+let presetSeq = 0;
 
 function applyPreset(name) {
   const ids = state.presets[name];
   if (!ids) return;
-  const usable = ids.filter((id) => state.nodes.some((n) => n.id === id && n.probes > 0));
+  // Only drop what we know is empty. An unknown id is still measurable — the
+  // server resolves `cc-asn` against live Atlas, not against this catalogue.
+  const usable = ids.filter((id) => (state.known.get(id)?.probes ?? 1) > 0);
   // Presets are shared with API callers and can be larger than this caller's
   // tier allows; trim rather than let the server reject the default flow.
   state.selected = new Set(usable.slice(0, state.limits.maxNodes));
   syncChips();
+
+  const seq = ++presetSeq;
+  if (ids.some((id) => !state.known.has(id))) {
+    api("/nodes?all=1")
+      .then((data) => {
+        if (seq !== presetSeq) return;
+        remember(data.nodes);
+        syncChosen();
+      })
+      .catch(() => {
+        /* labels degrade to the id; selection already happened and still works */
+      });
+  }
 }
 
 async function toggleAll() {
   state.showingAll = !state.showingAll;
   const data = await api(state.showingAll ? "/nodes?all=1" : "/nodes");
   state.nodes = data.nodes;
+  remember(data.nodes);
   $("more").textContent = state.showingAll ? "只看常用节点" : `展开全部 ${data.totalCount} 个节点`;
   renderRegions();
 }
@@ -220,13 +370,30 @@ function syncChips() {
 
 /** The collapsed picker still has to say what is selected, by name. */
 function syncChosen() {
-  // Keep catalogue order (grouped by continent) so the summary reads like a route.
-  const labels = state.nodes.filter((n) => state.selected.has(n.id)).map((n) => n.label);
+  // Keep catalogue order (grouped by continent) so the summary reads like a
+  // route, then append anything picked from search, which has no place in it.
+  const inOrder = state.nodes.filter((n) => state.selected.has(n.id)).map((n) => n.id);
+  const offCatalogue = [...state.selected].filter((id) => !inOrder.includes(id));
+  const labels = [...inOrder, ...offCatalogue].map((id) => state.known.get(id)?.label ?? id);
   const shown = labels.slice(0, 4).join("、");
   const rest = labels.length > 4 ? ` +${labels.length - 4}` : "";
   $("chosen").innerHTML = labels.length
     ? `已选 <b>${labels.length}</b> 个节点：${esc(shown)}${esc(rest)}`
     : "未选节点";
+}
+
+/**
+ * Probes per node for the current selection.
+ *
+ * The server caps nodes x probes, not nodes alone — two probes each across 50
+ * nodes is 100, over the anonymous ceiling of 50. Asking for more than fits
+ * would be rejected outright, so a wide selection trades depth for breadth
+ * instead of failing. Never below one: that is what makes the node a node.
+ */
+function probesPerNode(n) {
+  const cap = state.limits.maxProbes ?? 50;
+  const want = Math.min(PER_NODE, state.limits.maxPerNode ?? PER_NODE);
+  return n > 0 ? Math.max(1, Math.min(want, Math.floor(cap / n))) : want;
 }
 
 function updateCost() {
@@ -236,8 +403,12 @@ function updateCost() {
     $("cost").textContent = "选择节点后估算消耗";
     return;
   }
-  const credits = type.creditsPerProbe * n * PER_NODE;
-  $("cost").innerHTML = `<b>${n}</b> 个节点 × ${PER_NODE} 探针 · 预估 <b>${credits}</b> credits`;
+  const per = probesPerNode(n);
+  const credits = type.creditsPerProbe * n * per;
+  const note = per < Math.min(PER_NODE, state.limits.maxPerNode ?? PER_NODE)
+    ? `（节点多，每节点降到 ${per} 个探针以内不超上限）`
+    : "";
+  $("cost").innerHTML = `<b>${n}</b> 个节点 × ${per} 探针 · 预估 <b>${credits}</b> credits${esc(note)}`;
 }
 
 function syncTypeHint() {
@@ -253,22 +424,47 @@ function syncTypeHint() {
     type === "http" ? "xx-xxx.anchors.atlas.ripe.net" : type === "ntp" ? "pool.ntp.org" : "example.com · 1.1.1.1";
 }
 
-async function refreshQuota() {
-  try {
-    const q = await api("/quota");
-    state.limits = { maxNodes: q.maxNodes, maxPerNode: q.maxPerNode };
-    if (state.selected.size > q.maxNodes) {
-      state.selected = new Set([...state.selected].slice(0, q.maxNodes));
-      syncChips();
+/**
+ * The in-flight quota refresh, so a submit can wait for it.
+ *
+ * Limits decide `probesPerNode()`, and that number is both shown to the user
+ * and sent to the server. Submitting against limits that are about to change
+ * means one of two failures: a 400 for a selection the console just allowed,
+ * or — worse, because it is silent — spending twice the credits displayed.
+ */
+let quotaPending = null;
+let quotaSeq = 0;
+
+function refreshQuota() {
+  // Awaiting the newest promise is not enough on its own: two key changes in
+  // quick succession leave two requests in flight, and the older one still
+  // writes when it lands. Going BYOK → anonymous that way restores the BYOK
+  // allowance after the anonymous answer, which is exactly the state that
+  // spends twice what the cost line shows.
+  const seq = ++quotaSeq;
+  quotaPending = (async () => {
+    try {
+      const q = await api("/quota");
+      if (seq !== quotaSeq) return;
+      state.limits = { maxNodes: q.maxNodes, maxPerNode: q.maxPerNode, maxProbes: q.maxProbes };
+      if (state.selected.size > q.maxNodes) {
+        state.selected = new Set([...state.selected].slice(0, q.maxNodes));
+      }
+      const daily = q.creditsLimit ? ` · 今日已用 ${q.creditsUsedToday}/${q.creditsLimit}` : "";
+      $("quota").innerHTML =
+        q.tier === "byok"
+          ? `使用你自己的 Key · 可选 <b>${q.maxNodes}</b> 个节点`
+          : `匿名额度 <b>${q.tokensLeft}</b>/${q.tokenCapacity} 次${daily}`;
+    } catch {
+      if (seq === quotaSeq) $("quota").textContent = "";
+    } finally {
+      // Unconditionally, not only when the selection had to be trimmed: the
+      // probe budget moves with the tier, so 30 nodes can go from one probe
+      // each to two without the selection changing at all.
+      if (seq === quotaSeq) syncChips();
     }
-    const daily = q.creditsLimit ? ` · 今日已用 ${q.creditsUsedToday}/${q.creditsLimit}` : "";
-    $("quota").innerHTML =
-      q.tier === "byok"
-        ? `使用你自己的 Key · 可选 <b>${q.maxNodes}</b> 个节点`
-        : `匿名额度 <b>${q.tokensLeft}</b>/${q.tokenCapacity} 次${daily}`;
-  } catch {
-    $("quota").textContent = "";
-  }
+  })();
+  return quotaPending;
 }
 
 /* ── running ────────────────────────────────────────── */
@@ -283,6 +479,10 @@ async function submit(event) {
   $("go").disabled = true;
   $("out").innerHTML = `<p class="hint">正在向 ${esc(target)} 发起拨测…</p>`;
 
+  // A key typed a moment ago may still be in flight. Submitting first would
+  // send the previous tier's perNode against the new tier's ceiling.
+  await quotaPending;
+
   try {
     const created = await api("/probe", {
       method: "POST",
@@ -290,7 +490,7 @@ async function submit(event) {
         type: $("type").value,
         target,
         nodes: [...state.selected],
-        perNode: PER_NODE,
+        perNode: probesPerNode(state.selected.size),
         ...($("type").value === "dns" ? { queryType: $("qtype").value } : {}),
       }),
     });

@@ -27,6 +27,12 @@ export interface TierPolicy {
   traceroute: BucketSpec;
   maxNodes: number;
   maxPerNode: number;
+  /**
+   * Ceiling on nodes x probes for one measurement. Nodes alone do not bound
+   * the cost — 50 nodes at three probes each is 150 probes, five times the
+   * same 50 nodes at one.
+   */
+  maxProbes: number;
   /** 0 = unmetered (the caller is spending their own credits). */
   dailyCredits: number;
   countsAgainstGlobalBudget: boolean;
@@ -38,16 +44,26 @@ export const QUOTA: Record<Tier, TierPolicy> = {
     traceroute: { capacity: 2, refillSeconds: 300 },
     // Must be >= the largest shipped preset, or the console's default
     // selection is rejected before it can create anything.
-    maxNodes: 10,
+    maxNodes: 50,
     maxPerNode: 2,
+    // Level with maxNodes: a full 50-node selection gets one probe each, and
+    // fewer nodes buy depth instead. 50 ping probes is 150 credits against a
+    // 120,000/day public budget; 50 traceroute probes is 1,500.
+    maxProbes: 50,
     dailyCredits: 5000,
     countsAgainstGlobalBudget: true,
   },
   byok: {
     job: { capacity: 20, refillSeconds: 15 },
     traceroute: { capacity: 10, refillSeconds: 30 },
-    maxNodes: 25,
+    // A BYOK caller spends their own credits, so we do not ration their
+    // breadth: this is the structural ceiling (MAX_NODES), not a tier policy.
+    // What remains capped is the work *we* do on their behalf — every extra
+    // node is another Atlas lookup and another probe group in one request.
+    maxNodes: 50,
     maxPerNode: 3,
+    // 50 nodes x 3 probes. They are paying for it.
+    maxProbes: 150,
     dailyCredits: 0,
     countsAgainstGlobalBudget: false,
   },

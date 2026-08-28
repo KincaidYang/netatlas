@@ -4,6 +4,9 @@ import {
   OPERATOR_NAMES,
   POLICY,
   SEED_NODES,
+  continentOf,
+  matchesQuery,
+  searchNodes,
   type Node,
 } from "./nodes";
 
@@ -15,8 +18,20 @@ const TTL_MS = 3 * 60 * 60 * 1000;
 /** Atlas hard-caps a page at 500 regardless of what you ask for. */
 const PAGE = 500;
 const CONCURRENCY = 6;
-/** Keep DO storage well under the 128 KiB per-value limit. */
-const MAX_STORED_GROUPS = 2500;
+/**
+ * Every (country, ASN) pair Atlas has a connected probe in — about 5,000 of
+ * them, against the ~240 the curated catalogue offers. The search box needs
+ * all of them, including the 3,350-odd with a single probe.
+ *
+ * They do not fit in one place: 5,000 entries serialise to roughly 130 KB and
+ * a Durable Object value stops at 128 KiB, so they are stored in shards. The
+ * cap is a safety rail against unbounded growth, not a product decision.
+ */
+const MAX_STORED_GROUPS = 8000;
+/** Entries per shard — ~1,200 lands near 35 KB, far under the per-value limit. */
+const SHARD_SIZE = 1200;
+/** A search that returns 4,000 chips is not an answer; narrow the query. */
+const SEARCH_LIMIT = 120;
 /** Name at most this many newly-discovered ASNs per sweep. */
 const MAX_NEW_NAMES = 25;
 
@@ -30,6 +45,9 @@ export interface CatalogSnapshot {
   source: "live" | "seed";
   count: number;
   nodes: Node[];
+  /** Search responses only: how many pairs were looked through, and matched. */
+  searched?: number;
+  matched?: number;
 }
 
 const CLOUD = new Set(POLICY.cloud);
@@ -56,10 +74,12 @@ export class CatalogCache implements DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const force = url.searchParams.get("force") === "1";
+    const query = url.searchParams.get("q")?.trim() ?? "";
+    const sizeFor = url.searchParams.get("ids")?.trim() ?? "";
 
     const [counts, names, refreshedAt] = await Promise.all([
-      this.state.storage.get<Counts>("counts"),
-      this.state.storage.get<Record<string, string>>("names"),
+      this.loadSharded<Counts[string]>("groups", "counts"),
+      this.loadSharded<string>("names", "names"),
       this.state.storage.get<number>("refreshedAt"),
     ]);
 
@@ -70,6 +90,37 @@ export class CatalogCache implements DurableObject {
         this.refreshing = null;
       });
       this.state.waitUntil(this.refreshing);
+    }
+
+    // Live probe counts for specific node ids. `resolveNodes` plans its Atlas
+    // lookups by size, and it has no other way to know how big a pair it never
+    // catalogued really is — guessing made batches overflow Atlas's page cap.
+    if (sizeFor) {
+      const sizes: Record<string, number> = {};
+      for (const id of sizeFor.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+        const group = counts?.[id];
+        if (group) sizes[id] = group[0];
+      }
+      return Response.json({ sizes, source: counts ? "live" : "seed" });
+    }
+
+    // Search looks through every stored pair, not the curated list — that is the
+    // whole point: ~5,000 country×operator pairs exist and the catalogue shows
+    // ~240 of them. A node id is self-describing, so anything found here is
+    // directly selectable without the catalogue knowing about it.
+    if (query) {
+      const pool = counts ? allNodes(counts, names ?? {}) : SEED_NODES;
+      const hits = searchNodes(pool, query, SEARCH_LIMIT);
+      return Response.json({
+        refreshedAt: refreshedAt ? new Date(refreshedAt).toISOString() : null,
+        seededAt: CATALOG_GENERATED_AT,
+        stale,
+        source: counts ? "live" : "seed",
+        count: hits.length,
+        searched: pool.length,
+        matched: pool.filter((n) => matchesQuery(n, query)).length,
+        nodes: hits,
+      } satisfies CatalogSnapshot);
     }
 
     const snapshot: CatalogSnapshot = counts
@@ -109,7 +160,14 @@ export class CatalogCache implements DurableObject {
     const groups = new Map<string, { v4: number; v6: number; v6asn: Map<number, number> }>();
     for (const probe of [...first.results, ...rest]) {
       const cc = probe.country_code?.toLowerCase();
-      const asn = probe.asn_v4 ?? probe.asn_v6;
+      // A node id is `cc-<v4 ASN>`, so a probe without one cannot be addressed
+      // by any node — 188 of Atlas's connected probes are IPv6-only. Keying
+      // them by their v6 ASN instead built groups that resolve to nothing, and
+      // counted them as IPv4 probes of whichever node shares that number: KPN
+      // uses 1136 for both families, so `nl-1136` was credited with probes that
+      // have no IPv4 at all. They remain reachable for `af: 6` on a catalogued
+      // node, which queries by v6 ASN and never consults these counts.
+      const asn = probe.asn_v4;
       if (!cc || !asn) continue;
       const id = `${cc}-${asn}`;
       let g = groups.get(id);
@@ -124,8 +182,9 @@ export class CatalogCache implements DurableObject {
       }
     }
 
+    // Everything, not just what the curated catalogue would show: the search
+    // box offers the full set and `merge()` applies the policy on the way out.
     const kept = [...groups.entries()]
-      .filter(([, g]) => g.v4 >= POLICY.minProbes)
       .sort((a, b) => b[1].v4 - a[1].v4)
       .slice(0, MAX_STORED_GROUPS);
 
@@ -135,10 +194,65 @@ export class CatalogCache implements DurableObject {
       counts[id] = [g.v4, g.v6, dominantV6];
     }
 
-    const names = (await this.state.storage.get<Record<string, string>>("names")) ?? {};
+    const stored = (await this.loadSharded<string>("names", "names")) ?? {};
+    // Keep only names an existing group can display. Without this the map only
+    // ever grows — 25 new holders per sweep, forever, for ASNs that left the
+    // catalogue years ago — and at ~25 bytes each it crosses the 128 KiB
+    // per-value limit somewhere past 5,000 entries. That `put` then throws
+    // before `refreshedAt` advances, so the catalogue is permanently stale and
+    // every page load fires another 30-request sweep at Atlas.
+    const names: Record<string, string> = {};
+    for (const id of Object.keys(counts)) {
+      const asn = id.split("-")[1];
+      if (stored[asn]) names[asn] = stored[asn];
+    }
     await resolveNames(counts, names);
 
-    await this.state.storage.put({ counts, names, refreshedAt: Date.now() });
+    await this.saveSharded("groups", counts);
+    try {
+      await this.saveSharded("names", names);
+    } catch {
+      // Names are cosmetic — an unnamed node reads as ASnnnn and still works.
+      // Losing them must never cost us a refresh, because a refresh that never
+      // lands means every page load sweeps Atlas again.
+    }
+    await this.state.storage.put("refreshedAt", Date.now());
+    // The pre-sharding `counts` and `names` values are deliberately left in
+    // place. They cost a little dead storage and buy a safe rollback: an older
+    // Worker reads them and gets a working, if thinner, catalogue instead of
+    // falling all the way back to the committed seed.
+  }
+
+  /**
+   * A sharded map, falling back to the single value a pre-sharding sweep left
+   * behind. For groups that fallback holds only pairs with two or more probes,
+   * so search is thinner until the next sweep — degraded, not broken, which
+   * beats an empty catalogue after a deploy.
+   */
+  private async loadSharded<T>(prefix: string, legacyKey: string): Promise<Record<string, T> | undefined> {
+    const shards = (await this.state.storage.get<number>(`${prefix}Shards`)) ?? 0;
+    if (shards === 0) return this.state.storage.get<Record<string, T>>(legacyKey);
+    const keys = Array.from({ length: shards }, (_, i) => `${prefix}:${i}`);
+    const loaded = await this.state.storage.get<Record<string, T>>(keys);
+    const merged: Record<string, T> = {};
+    for (const part of loaded.values()) Object.assign(merged, part);
+    return merged;
+  }
+
+  private async saveSharded(prefix: string, data: Record<string, unknown>): Promise<void> {
+    const entries = Object.entries(data);
+    const shards = Math.max(1, Math.ceil(entries.length / SHARD_SIZE));
+    const write: Record<string, unknown> = { [`${prefix}Shards`]: shards };
+    for (let i = 0; i < shards; i++) {
+      write[`${prefix}:${i}`] = Object.fromEntries(entries.slice(i * SHARD_SIZE, (i + 1) * SHARD_SIZE));
+    }
+    await this.state.storage.put(write);
+
+    // A shrinking population leaves orphan shards that would otherwise be
+    // merged back in on the next read, resurrecting entries that are gone.
+    const previous = (await this.state.storage.get<number>(`${prefix}ShardsPrev`)) ?? 0;
+    for (let i = shards; i < previous; i++) await this.state.storage.delete(`${prefix}:${i}`);
+    await this.state.storage.put(`${prefix}ShardsPrev`, shards);
   }
 }
 
@@ -194,26 +308,44 @@ function cleanHolder(raw: string): string {
 
 const seedById = new Map(SEED_NODES.map((n) => [n.id, n]));
 
+/** One stored group as a displayable node. Shared by the catalogue and search. */
+function toNode(id: string, [v4, v6, v6asn]: Counts[string], names: Record<string, string>): Node {
+  const seed = seedById.get(id);
+  const [cc, asnStr] = id.split("-");
+  const asn = Number(asnStr);
+  const country = COUNTRY_NAMES[cc.toUpperCase()] ?? cc.toUpperCase();
+  const operator = OPERATOR_NAMES[asn] ?? names[asn] ?? seed?.holder ?? `AS${asn}`;
+  return {
+    id,
+    cc: cc.toUpperCase(),
+    asn,
+    asnV6: v6asn ?? seed?.asnV6 ?? null,
+    label: seed?.label ?? `${country} · ${operator}`,
+    holder: seed?.holder ?? names[asn] ?? null,
+    continent: seed?.continent ?? continentOf(cc),
+    probes: v4,
+    probesV6: v6,
+  };
+}
+
+/**
+ * Every stored pair as a node, no policy applied — what the search box looks
+ * through. Single-probe pairs are included on purpose; they are marked in the
+ * console rather than hidden, because "one probe, may not answer" is a fact
+ * the reader can act on and a missing node is not.
+ */
+function allNodes(counts: Counts, names: Record<string, string>): Node[] {
+  return Object.entries(counts).map(([id, group]) => toNode(id, group, names));
+}
+
 /** Turn live counts into the displayable node list, applying the seed's policy. */
 function merge(counts: Counts, names: Record<string, string>): Node[] {
   const all: Node[] = [];
-  for (const [id, [v4, v6, v6asn]] of Object.entries(counts)) {
-    const seed = seedById.get(id);
-    const [cc, asnStr] = id.split("-");
-    const asn = Number(asnStr);
-    const country = COUNTRY_NAMES[cc.toUpperCase()] ?? cc.toUpperCase();
-    const operator = OPERATOR_NAMES[asn] ?? names[asn] ?? seed?.holder ?? `AS${asn}`;
-    all.push({
-      id,
-      cc: cc.toUpperCase(),
-      asn,
-      asnV6: v6asn ?? seed?.asnV6 ?? null,
-      label: seed?.label ?? `${country} · ${operator}`,
-      holder: seed?.holder ?? names[asn] ?? null,
-      continent: seed?.continent ?? "??",
-      probes: v4,
-      probesV6: v6,
-    });
+  for (const [id, group] of Object.entries(counts)) {
+    // Stored groups now include single-probe pairs for the search box; the
+    // curated catalogue has always required POLICY.minProbes and still does.
+    if (group[0] < POLICY.minProbes) continue;
+    all.push(toNode(id, group, names));
   }
 
   // Same shape as the build script: top-N per country, with the curated

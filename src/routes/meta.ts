@@ -32,8 +32,27 @@ meta.get("/nodes", async (c) => {
     if (hit) return hit;
   }
 
+  // `q` searches every country×operator pair Atlas has a probe in (~5,000),
+  // not the ~240 the catalogue curates. A node id is self-describing, so a hit
+  // here is selectable even though the catalogue never listed it.
+  const query = url.searchParams.get("q")?.trim() ?? "";
   const stub = c.env.CATALOG.get(c.env.CATALOG.idFromName("v1"));
-  const snapshot = await (await stub.fetch(`https://catalog/nodes${force ? "?force=1" : ""}`)).json<CatalogSnapshot>();
+  const params = new URLSearchParams();
+  if (force) params.set("force", "1");
+  if (query) params.set("q", query);
+  const snapshot = await (
+    await stub.fetch(`https://catalog/nodes${params.size ? `?${params}` : ""}`)
+  ).json<CatalogSnapshot>();
+
+  if (query) {
+    // Search results are per-query and cheap to recompute; caching them at the
+    // edge would fill the cache with one entry per thing anyone ever typed.
+    const res = Response.json(
+      { ...snapshot, tier: "search", query },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+    return res;
+  }
 
   // Default to the short list: 240-odd chips is paralysing when all you want
   // is "is my site reachable from Japan". `?all=1` returns everything.
@@ -96,6 +115,7 @@ meta.get("/quota", async (c) => {
     creditsLimit: rate.creditsLimit || null,
     maxNodes: policy.maxNodes,
     maxPerNode: policy.maxPerNode,
+    maxProbes: policy.maxProbes,
     publicBudget: { remaining: budget.remaining, limit: budget.limit },
   });
 });
