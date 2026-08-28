@@ -38,6 +38,12 @@ const MAX_NEW_NAMES = 25;
 /** [v4 probes, v6 probes, dominant v6 ASN] */
 type Counts = Record<string, [number, number, number | null]>;
 
+/** What one sweep saw in total, before the node model narrows it. */
+interface SweptTotals {
+  probes: number;
+  countries: number;
+}
+
 export interface CatalogSnapshot {
   refreshedAt: string | null;
   seededAt: string;
@@ -143,7 +149,7 @@ export class CatalogCache implements DurableObject {
       this.loadSharded<Counts[string]>("groups", "counts"),
       this.loadSharded<string>("names", "names"),
       this.state.storage.get<number>("refreshedAt"),
-      this.state.storage.get<{ probes: number; countries: number }>("sweptTotals"),
+      this.state.storage.get<SweptTotals>("sweptTotals"),
     ]);
 
     this.state.waitUntil(this.ensureAlarm(refreshedAt));
@@ -230,7 +236,10 @@ export class CatalogCache implements DurableObject {
     // country and must not be counted as one — the probe itself is real and
     // still counts.
     const placed = all.map((p) => p.country_code).filter((cc): cc is string => !!cc && cc !== "?");
-    const swept = { probes: all.filter((p) => p.country_code).length, countries: new Set(placed).size };
+    // Every connected probe counts, including one Atlas could not place at all
+    // — it is online and it can answer. Only the *country* is unknown, which is
+    // why the filter belongs on `countries` and nowhere else.
+    const swept = { probes: all.length, countries: new Set(placed).size };
 
     const groups = new Map<string, { v4: number; v6: number; v6asn: Map<number, number> }>();
     for (const probe of all) {
@@ -283,15 +292,7 @@ export class CatalogCache implements DurableObject {
     }
     await resolveNames(counts, names);
 
-    await this.saveSharded("groups", counts);
-    try {
-      await this.saveSharded("names", names);
-    } catch {
-      // Names are cosmetic — an unnamed node reads as ASnnnn and still works.
-      // Losing them must never cost us a refresh, because a refresh that never
-      // lands means every page load sweeps Atlas again.
-    }
-    await this.state.storage.put({ sweptTotals: swept, refreshedAt: Date.now() });
+    await this.commit(counts, names, swept);
     // The pre-sharding `counts` and `names` values are deliberately left in
     // place. They cost a little dead storage and buy a safe rollback: an older
     // Worker reads them and gets a working, if thinner, catalogue instead of
@@ -314,21 +315,51 @@ export class CatalogCache implements DurableObject {
     return merged;
   }
 
-  private async saveSharded(prefix: string, data: Record<string, unknown>): Promise<void> {
-    const entries = Object.entries(data);
-    const shards = Math.max(1, Math.ceil(entries.length / SHARD_SIZE));
-    const write: Record<string, unknown> = { [`${prefix}Shards`]: shards };
-    for (let i = 0; i < shards; i++) {
-      write[`${prefix}:${i}`] = Object.fromEntries(entries.slice(i * SHARD_SIZE, (i + 1) * SHARD_SIZE));
-    }
+  /**
+   * Publish one sweep as a single generation.
+   *
+   * Written in one `put`, which a Durable Object applies as one transaction.
+   * Three separate writes let a failure between them leave the new groups —
+   * new counts, new planning sizes — beside the previous sweep's probe totals
+   * and `refreshedAt`, and the edge cache would serve that mixture for a minute
+   * as though it were one moment. The alarm retry would eventually repair it,
+   * which is not the same as never publishing it.
+   *
+   * This costs the resilience the names write used to have, where a failure
+   * there still let `refreshedAt` advance. That guard existed because an
+   * unbounded names map could outgrow the value limit; sharding and pruning
+   * removed the cause, and a whole generation retried in ten minutes beats
+   * half of one served immediately.
+   */
+  private async commit(counts: Counts, names: Record<string, string>, swept: SweptTotals): Promise<void> {
+    const write: Record<string, unknown> = { sweptTotals: swept, refreshedAt: Date.now() };
+    const groupShards = shardInto(write, "groups", counts);
+    const nameShards = shardInto(write, "names", names);
     await this.state.storage.put(write);
 
-    // A shrinking population leaves orphan shards that would otherwise be
-    // merged back in on the next read, resurrecting entries that are gone.
+    // After the fact on purpose: a read consults `<prefix>Shards` to know how
+    // many to load, so a leftover shard beyond that count is already invisible.
+    // Deleting it is hygiene, and hygiene must not be able to fail a sweep.
+    await this.prune("groups", groupShards);
+    await this.prune("names", nameShards);
+  }
+
+  private async prune(prefix: string, shards: number): Promise<void> {
     const previous = (await this.state.storage.get<number>(`${prefix}ShardsPrev`)) ?? 0;
     for (let i = shards; i < previous; i++) await this.state.storage.delete(`${prefix}:${i}`);
     await this.state.storage.put(`${prefix}ShardsPrev`, shards);
   }
+}
+
+/** Add `data` to `write` as `<prefix>:<n>` shards; returns how many there are. */
+function shardInto(write: Record<string, unknown>, prefix: string, data: Record<string, unknown>): number {
+  const entries = Object.entries(data);
+  const shards = Math.max(1, Math.ceil(entries.length / SHARD_SIZE));
+  write[`${prefix}Shards`] = shards;
+  for (let i = 0; i < shards; i++) {
+    write[`${prefix}:${i}`] = Object.fromEntries(entries.slice(i * SHARD_SIZE, (i + 1) * SHARD_SIZE));
+  }
+  return shards;
 }
 
 interface ProbeRow {
@@ -402,7 +433,7 @@ const seedById = new Map(SEED_NODES.map((n) => [n.id, n]));
  */
 function totalsOf(
   counts: Counts,
-  swept: { probes: number; countries: number } | undefined,
+  swept: SweptTotals | undefined,
 ): { probes: number; groups: number; countries: number } | undefined {
   if (!swept) return undefined;
   return { probes: swept.probes, groups: Object.keys(counts).length, countries: swept.countries };
