@@ -114,6 +114,24 @@ details.key p{color:var(--ink-soft);max-width:40rem}
 main{margin-top:2.5rem}
 .hint{color:var(--ink-soft)}
 .runhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:.75rem;border-bottom:var(--frame);padding-bottom:.6rem;margin-bottom:1.25rem}
+.runhead .views{display:inline-flex;border:var(--frame)}
+.runhead .viewbtn{background:none;border:0;color:var(--ink-soft);font:inherit;font-size:.75rem;letter-spacing:.06em;padding:.2rem .55rem;cursor:pointer}
+.runhead .viewbtn[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+/* One row per probe. Dense on purpose — this view exists for scanning fifty
+   nodes, which the cards are bad at. */
+.grid{width:100%;border-collapse:collapse;font-size:.8125rem;margin-bottom:1.25rem}
+.grid th{text-align:left;font-family:var(--cond);text-transform:uppercase;letter-spacing:.08em;font-size:.6875rem;color:var(--ink-soft);border-bottom:var(--frame);padding:.3rem .5rem}
+.grid td{padding:.22rem .5rem;border-bottom:var(--hairline);overflow-wrap:anywhere}
+.grid td:first-child{font-weight:600}
+.grid .c{color:var(--ink-soft)}
+.grid .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.grid .n.slow{color:var(--err)}
+.grid .a{font-size:.75rem}
+.grid .e{color:var(--err);font-size:.75rem}
+.grid tr.down td{color:var(--err)}
+/* The API is the product too; show the one-liner that reproduces this run. */
+.cli{display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap;color:var(--ink-soft);font-size:.75rem;letter-spacing:.06em;border-top:var(--hairline);padding-top:.6rem}
+.cli code{color:var(--ink);font-size:.75rem;overflow-wrap:anywhere}
 .runhead .kind{font-family:var(--cond);font-weight:600;text-transform:uppercase;letter-spacing:.1em;font-size:.8125rem;color:var(--ink-soft)}
 /* Hostnames are case-sensitive to the eye; never shout them. */
 .runhead .what{font-family:var(--cond);font-weight:600;letter-spacing:.01em;font-size:1.05rem;overflow-wrap:anywhere}
@@ -153,6 +171,11 @@ main{margin-top:2.5rem}
 .answer.alt{border-left-color:var(--accent)}
 .answer .val{font-weight:600;overflow-wrap:anywhere;font-size:.8125rem}
 .answer .who{color:var(--ink-soft);font-size:.75rem;margin-top:.1rem;overflow-wrap:anywhere}
+/* A big site answers with dozens of records; the summary must not grow with
+   them. Same disclosure shape as the traceroute hop list. */
+.answer .more summary{cursor:pointer;font-weight:600}
+.answer .more[open] summary{margin-bottom:.2rem}
+.answer .more{font-weight:400;font-size:.8125rem}
 
 .sheet{background:var(--panel);border:var(--frame);border-left-width:4px;padding:.7rem .9rem;margin-bottom:.55rem;animation:land .25s ease-out}
 @keyframes land{from{opacity:0;transform:translateY(4px)}}
@@ -163,6 +186,21 @@ main{margin-top:2.5rem}
 .sheet .node{font-family:var(--cond);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
 .sheet .asn{color:var(--ink-soft);font-size:.75rem}
 .sheet .cities{color:var(--contour);font-size:.75rem;letter-spacing:.04em}
+.sheet .took{color:var(--ink-soft);font-size:.75rem;font-variant-numeric:tabular-nums}
+/* Folded: a node with nothing to act on. The header is the whole row, so the
+   summary must not add a line of its own. */
+.sheet.folded{padding-top:.45rem;padding-bottom:.45rem}
+.sheet.folded summary{cursor:pointer;list-style:none}
+.sheet.folded summary::-webkit-details-marker{display:none}
+.sheet.folded summary header{display:flex}
+.sheet.folded details[open] summary{margin-bottom:.4rem}
+.sheet.folded .body{margin-top:0}
+/* The answer every probe agreed on, printed once above their lines. */
+.sheet .shared{font-size:.8125rem;overflow-wrap:anywhere;margin-bottom:.35rem}
+/* .ttl was only styled inside a <dd>; the shared block is not one. */
+.sheet .shared .ttl{color:var(--contour);font-size:.6875rem;margin-left:.5rem;letter-spacing:.04em}
+.sheet .pid.line{margin-top:.2rem}
+.sheet .pid .slow,.sheet .pid.line .slow{color:var(--err)}
 .picker .search{margin:.5rem 0 .9rem}
 .picker .search input{width:100%;padding:.5rem .6rem;background:var(--panel);border:var(--frame);color:var(--ink);font:inherit;font-size:.8125rem}
 .picker .search input::placeholder{color:var(--contour)}
