@@ -68,6 +68,21 @@ export async function releaseCredits(
   await budget(env).fetch(`https://budget/release?${q}`);
 }
 
+/**
+ * Creation failed: return the credits to this caller's daily allowance.
+ *
+ * The counterpart to `releaseCredits`, which returns the platform's global
+ * reservation. Without this the two ledgers disagree — the platform is made
+ * whole and the caller is charged for a measurement that does not exist.
+ */
+export async function refundCredits(env: Env, caller: Caller, credits: number): Promise<void> {
+  if (credits <= 0) return;
+  await limiter(env, caller).fetch("https://limiter/take", {
+    method: "POST",
+    body: JSON.stringify({ tier: caller.tier, type: "refund", credits, refund: true }),
+  });
+}
+
 /** Creation succeeded: name the in-flight slot after the measurement and publish it for de-duplication. */
 export async function markCreated(
   env: Env,

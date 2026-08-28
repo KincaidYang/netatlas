@@ -12,6 +12,7 @@ import {
   rateCheck,
   rejectBudget,
   rejectRate,
+  refundCredits,
   releaseCredits,
   reserveCredits,
   settleMeasurement,
@@ -126,7 +127,7 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
   let credits = 0;
   let measurementId: number;
   let selection: Awaited<ReturnType<typeof resolveNodes>>;
-  let take: Awaited<ReturnType<typeof rateCheck>>;
+  let take: Awaited<ReturnType<typeof rateCheck>> | undefined;
   try {
     // Reads are public, so node resolution always uses the platform key.
     selection = await resolveNodes(
@@ -155,6 +156,10 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     // Only give credits back if they were actually reserved — a ticket is
     // proof of that; without one this just hands the claim back.
     await releaseCredits(env, ticket ? credits : 0, ticket, key);
+    // And to the caller's own allowance, which `rateCheck` charged before the
+    // create was attempted. Both ledgers or neither: billing one side for a
+    // measurement that does not exist is the asymmetry this pairs up.
+    if (take?.ok) await refundCredits(env, caller, credits);
     throw err;
   }
 
@@ -168,7 +173,7 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     unavailable: selection.unavailable,
     estimatedCredits: credits,
     billedTo: caller.usingOwnKey ? "your-key" : "public",
-    tokensLeft: take.remaining,
+    tokensLeft: take?.remaining,
   };
 }
 

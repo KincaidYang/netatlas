@@ -10,6 +10,8 @@ export interface TakeRequest {
   tier: Tier;
   type: string;
   credits: number;
+  /** Give `credits` back to this caller's daily ledger; the token is not returned. */
+  refund?: boolean;
   /** Check only — used by GET /quota so a status peek costs nothing. */
   peek?: boolean;
 }
@@ -39,6 +41,29 @@ export class RateLimiter implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const req = (await request.json()) as TakeRequest;
+
+    /**
+     * Creation failed after the credits were charged: give them back.
+     *
+     * The global budget already had this — `releaseCredits` returns the
+     * reservation — while the caller's own daily allowance did not, so a
+     * measurement Atlas refused was billed to the person who asked for it and
+     * to nobody else. Five unresolvable targets put 15 credits on an anonymous
+     * caller's 5,000 for measurements that never existed.
+     *
+     * The token is deliberately not returned. A rejected request still made us
+     * resolve nodes against Atlas, and refunding it would make a flood of bad
+     * targets free.
+     */
+    if (req.refund) {
+      const day = dayKey(Date.now());
+      const rec = await this.state.storage.get<{ day: string; credits: number }>("spent");
+      const spent = rec?.day === day ? rec.credits : 0;
+      const credits = Math.max(0, spent - Math.max(req.credits, 0));
+      await this.state.storage.put("spent", { day, credits });
+      return Response.json({ ok: true, retryAfterSec: 0, remaining: 0, creditsUsedToday: credits, creditsLimit: 0 });
+    }
+
     const policy = QUOTA[req.tier] ?? QUOTA.anon;
     const { name, spec } = bucketFor(req.tier, req.type);
     const now = Date.now();
