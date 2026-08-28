@@ -55,6 +55,8 @@ const state = {
    * call; this only picks which view opens first, and both show everything.
    */
   view: localStorage.getItem("view") || null,
+  /** Row order held steady across polls: { id, keys }. */
+  order: null,
   selected: new Set(),
   showingAll: false,
   timer: null,
@@ -644,7 +646,15 @@ function render(report, id) {
 
   // One order for both blocks, or the chart and the cards disagree about what
   // comes first.
-  const groups = ordered(report);
+  //
+  // Frozen while the run is still going. Ranks depend on results, and results
+  // arrive over minutes — re-sorting every three seconds moves rows out from
+  // under whoever is reading them. The order is taken once and kept, with
+  // newcomers appended in rank order, until the run stops updating — `running`
+  // above, which is polling *and* still short of a full response.
+  const ranked = ordered(report);
+  const groups = running && state.order?.id === id ? hold(state.order.keys, ranked) : ranked;
+  state.order = { id, keys: groups.map((g) => g.key) };
   // Cards read better for a handful of nodes and become a wall past a dozen,
   // so that is where the first view flips. A weak judgement on purpose: it
   // decides what opens, never what exists, and one click overrides it for good.
@@ -747,7 +757,13 @@ function answerView(report) {
     const key = signature(report.type, g);
     if (!key) continue;
     let b = buckets.get(key);
-    if (!b) buckets.set(key, (b = { who: [], ttlMin: null, ttlMax: null }));
+    if (!b) {
+      // The records themselves, not the joined string. Splitting the display
+      // form back apart on ", " turns one TXT record containing ", " — an SPF
+      // policy, say — into several fake ones, and then counts and folds them
+      // as if the answer were large.
+      buckets.set(key, (b = { who: [], ttlMin: null, ttlMax: null, records: recordsOf(report.type, g) }));
+    }
     b.who.push(g.label);
     // TTL is each resolver's cache remainder, so it varies everywhere by
     // design — reported as a range, never used to decide who agrees.
@@ -811,13 +827,12 @@ function answerView(report) {
   // that happens to return one type still needs it on every line: the header
   // says ANY, so without the prefix there is no way to tell whether the value
   // is an MX, a TXT or an HINFO.
-  const strip = (answer) => {
-    const parts = answer.split(", ");
-    const types = new Set(parts.map((r) => r.slice(0, r.indexOf(" "))));
+  const strip = (records) => {
+    const types = new Set(records.map((r) => r.slice(0, r.indexOf(" "))));
     const named = report.type === "dns" && report.queryType && report.queryType !== "ANY";
     return named && types.size === 1 && types.has(report.queryType)
-      ? parts.map((r) => r.slice(r.indexOf(" ") + 1))
-      : parts;
+      ? records.map((r) => r.slice(r.indexOf(" ") + 1))
+      : records;
   };
 
   /**
@@ -828,8 +843,8 @@ function answerView(report) {
    * growing with the size of the answer.
    */
   const INLINE = 3;
-  const display = (answer) => {
-    const parts = strip(answer);
+  const display = (records) => {
+    const parts = strip(records);
     if (parts.length <= INLINE) return esc(parts.join(", "));
     return (
       `<details class="more"><summary>${parts.length} 个地址 · ${esc(parts[0])} …</summary>` +
@@ -840,7 +855,7 @@ function answerView(report) {
   return (
     verdict +
     sorted
-      .map(([answer, b], i) => {
+      .map(([, b], i) => {
         const ttl =
           b.ttlMin === null
             ? ""
@@ -851,12 +866,23 @@ function answerView(report) {
             ? `其余 ${b.who.length} 个节点`
             : `${b.who.length} 个节点 · ${who(b.who)}`;
         return (
-          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${display(answer)}</div>` +
+          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${display(b.records)}</div>` +
           `<div class="who" title="${esc(b.who.join("、"))}">${esc(label)}${esc(ttl)}</div></div>`
         );
       })
       .join("")
   );
+}
+
+/**
+ * A group's answer as a list, which is what the display needs. `signature()`
+ * flattens the same thing into one string to use as a bucket key; that string
+ * must never be taken apart again.
+ */
+function recordsOf(type, group) {
+  if (type === "dns") return group.summary?.distinctAnswers ?? [];
+  const fp = group.summary?.fingerprint;
+  return fp ? [`SHA-256 ${fp.slice(0, 16)}…`] : [];
 }
 
 function signature(type, group) {
@@ -929,6 +955,14 @@ function minorityKeys(report) {
   if (buckets.size < 2) return new Set();
   const biggest = Math.max(...[...buckets.values()].map((v) => v.length));
   return new Set([...buckets.values()].filter((v) => v.length < biggest).flat());
+}
+
+/** Keep the established order; anything new goes after it, already ranked. */
+function hold(keys, ranked) {
+  const seen = new Map(ranked.map((g) => [g.key, g]));
+  const kept = keys.map((k) => seen.get(k)).filter(Boolean);
+  const fresh = ranked.filter((g) => !keys.includes(g.key));
+  return [...kept, ...fresh];
 }
 
 /** Problem first, then slowest to fastest. */
@@ -1162,8 +1196,12 @@ function markdown(report, id) {
     for (const p of g.probes) {
       // Same source as the table, or the two drift.
       const t = p.rttMs ?? p.detail?.avg;
-      const cell = p.ok ? outcome(report.type, p).replace(/<[^>]*>/g, "") : (p.error ?? "失败");
-      lines.push(`| ${g.label} | ${p.city ?? ""} | ${t == null ? "—" : ms(t)} | ${cell} |`);
+      // Unconditional, like the table: a traceroute that never arrived still
+      // has its hop count and an expired certificate still has its subject.
+      // The error joins it rather than replacing it.
+      const seen = outcome(report.type, p).replace(/<[^>]*>/g, "");
+      const cell = [seen, p.ok ? "" : (p.error ?? "失败")].filter(Boolean).join(" · ");
+      lines.push(`| ${g.label} | ${p.city ?? ""} | ${t == null ? "—" : ms(t)} | ${cell || "—"} |`);
     }
   }
   lines.push("", `${location.origin}/m/${id}`);
