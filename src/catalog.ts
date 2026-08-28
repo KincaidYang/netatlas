@@ -252,7 +252,12 @@ export class CatalogCache implements DurableObject {
       // have no IPv4 at all. They remain reachable for `af: 6` on a catalogued
       // node, which queries by v6 ASN and never consults these counts.
       const asn = probe.asn_v4;
-      if (!cc || !asn) continue;
+      // `?` is Atlas's placeholder for a probe it could not place. A `?-29802`
+      // group would be counted among the pairs the console calls 全部可搜索
+      // and then rejected by `parseNodeId()`, which takes two-letter codes
+      // only — advertised and unselectable, the exact combination the search
+      // box exists to avoid.
+      if (!cc || cc === "?" || !asn) continue;
       const id = `${cc}-${asn}`;
       let g = groups.get(id);
       if (!g) {
