@@ -233,7 +233,13 @@ console.log(`\n展开态是否活过一次轮询 ── ${live ? `真实测量 $
 let failed = 0;
 for (const r of results) {
   if (r.skipped) {
-    console.log(`⏭  ${r.name} — ${r.skipped}`);
+    // A skip is only ever legitimate in live mode, where the measurement type
+    // decides which disclosures exist — a traceroute has no DNS answer block.
+    // The stubbed cases are deterministic and both are required, so a skip
+    // there means the page did not render, which is the regression this exists
+    // to catch. Exiting 0 on it would make the whole check decorative.
+    if (!live) failed++;
+    console.log(`${live ? "⏭ " : "❌"} ${r.name} — ${r.skipped}${live ? "" : "（打桩模式不允许跳过）"}`);
     continue;
   }
   const ok = r.opened && r.present && r.stillOpen && r.polled;
