@@ -682,16 +682,22 @@ function render(report, id) {
   //
   // Read before anything is rebuilt: `answerView` replaces `state.answers`, and
   // what the reader had open is described by the previous one.
+  //
+  // Only within one measurement, the way `state.order` scopes itself. Across
+  // runs these keys are not evidence of anything the reader did: repeating a
+  // measurement reuses probes, so the same hop list reappears, and a repeat of
+  // the same query returns the same addresses — both would spring open on a
+  // result nobody had touched.
+  const sameRun = state.shown === id;
   const opened = new Set(
-    [...$("out").querySelectorAll("details[data-k][open]")].map((d) => d.dataset.k),
+    sameRun ? [...$("out").querySelectorAll("details[data-k][open]")].map((d) => d.dataset.k) : [],
   );
-  const openedSets = [...opened]
-    .map((k) => state.answers?.get(k))
-    .filter(Boolean);
+  const openedSets = [...opened].map((k) => state.answers?.get(k)).filter(Boolean);
 
   const body = LATENCY_TYPES.has(report.type) ? latencyView(report, groups) : answerView(report);
   const detail = view === "table" ? tableView(groups, report.type) : groups.map(sheet).join("");
   $("out").innerHTML = head + body + detail + cliHint(report, id);
+  state.shown = id;
   if (opened.size) {
     for (const d of $("out").querySelectorAll("details[data-k]")) {
       // A probe id is already an identity and never changes. An answer is a

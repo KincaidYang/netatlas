@@ -71,13 +71,28 @@ const hops = (n) =>
  * tick is a real re-render — the thing under test. A fixture that returned a
  * finished measurement would render once and prove nothing.
  */
-const counters = { 1: 0, 2: 0 };
+const counters = { 1: 0, 2: 0, 3: 0 };
 const stub = {
   1: () => ({
     measurementId: 1, type: "traceroute", target: "example.com", queryType: null,
     status: "Ongoing", totalRequested: 9, totalResponded: ++counters[1],
     groups: [{
       key: "cn-4134", label: "中国 · 电信", requested: 9, responded: counters[1],
+      summary: { hopsAvg: 8, rttMs: { avg: 30 } },
+      probes: [{
+        probeId: 1001, ok: true, rttMs: 30, city: "北京", from: "1.2.3.4", asn: 4134, country: "CN",
+        detail: { hopCount: 8, reached: true, timeouts: 0, lossyHops: 0, dstAddr: "93.184.216.34", hops: hops(8) },
+      }],
+    }],
+  }),
+  // Deliberately the same shape and the same probe as `1`, so its disclosure
+  // key is identical. Repeating a measurement really does reuse probes, which
+  // is what makes leaking the open state across runs both possible and wrong.
+  3: () => ({
+    measurementId: 3, type: "traceroute", target: "example.com", queryType: null,
+    status: "Ongoing", totalRequested: 9, totalResponded: ++counters[3],
+    groups: [{
+      key: "cn-4134", label: "中国 · 电信", requested: 9, responded: counters[3],
       summary: { hopsAvg: 8, rttMs: { avg: 30 } },
       probes: [{
         probeId: 1001, ok: true, rttMs: 30, city: "北京", from: "1.2.3.4", asn: 4134, country: "CN",
@@ -234,6 +249,61 @@ async function survivesAPoll(browser, base, id, selector, name) {
   await page.close();
 }
 
+/**
+ * The open state must not survive a change of measurement.
+ *
+ * Keys are content-stable on purpose, which is exactly why they are not
+ * evidence across runs: repeat a measurement and the same probe answers, so the
+ * same hop list comes back under the same key. Restoring it there would open a
+ * disclosure on a result nobody had touched.
+ */
+async function doesNotLeakAcrossRuns(browser, base) {
+  const name = "换一次测量后不残留";
+  const page = await browser.newPage();
+  await stubRoutes(page);
+  await page.goto(`${base}/?m=1`);
+  const d = page.locator("details.raw").first();
+  try {
+    await d.waitFor({ timeout: 30000 });
+  } catch {
+    results.push({ name, simple: true, ok: false, detail: "第一次测量就没渲染出可展开块" });
+    await page.close();
+    return;
+  }
+  await d.locator("summary").click();
+  const opened = await d.evaluate((el) => {
+    window.__w = el;
+    return el.open;
+  });
+  const key = await d.evaluate((el) => el.dataset.k);
+
+  await page.evaluate(() => load(3));
+  let switched = true;
+  try {
+    await page.waitForFunction(() => !document.contains(window.__w), null, { timeout: 30000 });
+  } catch {
+    switched = false;
+  }
+  const after = await page.evaluate((k) => {
+    const el = document.querySelector(`#out details[data-k="${CSS.escape(k)}"]`);
+    return { present: !!el, open: !!el?.open };
+  }, key);
+  await page.close();
+
+  results.push({
+    name,
+    simple: true,
+    ok: opened && switched && after.present && !after.open,
+    detail: !switched
+      ? "切换后没有重渲染"
+      : !after.present
+        ? "新测量里没有同 key 的块，这个用例没测到东西"
+        : after.open
+          ? `${key} 在新测量里自己展开了`
+          : `${key} 在新测量里保持收起`,
+  });
+}
+
 const { server, base } = live ? { server: null, base: liveBase } : await serve();
 const browser = await chromium.launch();
 
@@ -243,6 +313,7 @@ if (live) {
 } else {
   await survivesAPoll(browser, base, 1, "details.raw", "traceroute 逐跳");
   await survivesAPoll(browser, base, 2, "details.more", "dns 多地址");
+  await doesNotLeakAcrossRuns(browser, base);
 }
 
 await browser.close();
@@ -251,6 +322,11 @@ server?.close();
 console.log(`\n展开态是否活过一次轮询 ── ${live ? `真实测量 ${liveId} @ ${liveBase}` : "打桩"}\n`);
 let failed = 0;
 for (const r of results) {
+  if (r.simple) {
+    if (!r.ok) failed++;
+    console.log(`${r.ok ? "✅" : "❌"} ${r.name}  ${r.detail}`);
+    continue;
+  }
   if (r.skipped) {
     // A skip is only ever legitimate in live mode, where the measurement type
     // decides which disclosures exist — a traceroute has no DNS answer block.
