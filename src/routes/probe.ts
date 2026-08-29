@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { aggregate } from "../aggregate";
-import { AtlasClient } from "../atlas";
+import { AtlasClient, atlasRejected } from "../atlas";
 import { buildDescription } from "../describe";
 import {
   QUOTA,
@@ -159,7 +159,13 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     // And to the caller's own allowance, which `rateCheck` charged before the
     // create was attempted. Both ledgers or neither: billing one side for a
     // measurement that does not exist is the asymmetry this pairs up.
-    if (take?.ok) await refundCredits(env, caller, credits, take.day);
+    // Only when Atlas is known to have refused. If the POST was delivered and
+    // the failure came afterwards — a body that would not read, JSON that would
+    // not parse — the measurement may exist and be spending, and handing the
+    // credits back would bill nobody for it. The platform's own ledger survives
+    // that ambiguity because `DailyBudget` reconciles against Atlas every ten
+    // minutes; the caller's does not, so it errs toward keeping the charge.
+    if (take?.ok && atlasRejected(err)) await refundCredits(env, caller, credits, take.day);
     throw err;
   }
 

@@ -35,6 +35,18 @@ export interface ProbeQuery {
  * link render for anyone, including measurements created with a caller's own
  * key. We still send the key when we have one, for the higher rate limits.
  */
+/**
+ * Marks a create that Atlas refused outright — the request was delivered, the
+ * answer was an error, and no measurement exists. Only then is it safe to give
+ * the caller their credits back: refunding an ambiguous failure charges nobody
+ * for a measurement that is running, which is the same disagreement between the
+ * two ledgers as the bug that added the refund, pointing the other way.
+ */
+const ATLAS_REJECTED = Symbol.for("netatlas.atlasRejected");
+
+export const atlasRejected = (e: unknown): boolean =>
+  typeof e === "object" && e !== null && (e as Record<symbol, unknown>)[ATLAS_REJECTED] === true;
+
 export class AtlasClient {
   constructor(private readonly apiKey?: string) {}
 
@@ -69,11 +81,20 @@ export class AtlasClient {
     });
     const body = await res.text();
     if (!res.ok) {
+      // The only failure here that proves nothing was created. Everything else
+      // in this method — a fetch that never returned, a body that would not
+      // read, JSON that would not parse, a 2xx with no id — happens with the
+      // POST already delivered, and Atlas may well have created and billed the
+      // measurement. `atlasRejected` is how the caller tells those apart
+      // before handing credits back.
       // Pass Atlas's own wording through — it is far more useful than ours
       // (e.g. "Only anchors may be targeted", quota and concurrency errors).
-      throw new HTTPException(res.status === 400 ? 400 : 502, {
-        message: `atlas create failed (${res.status}): ${body.slice(0, 400)}`,
-      });
+      throw Object.assign(
+        new HTTPException(res.status === 400 ? 400 : 502, {
+          message: `atlas create failed (${res.status}): ${body.slice(0, 400)}`,
+        }),
+        { [ATLAS_REJECTED]: true },
+      );
     }
     const data = JSON.parse(body) as { measurements?: number[] };
     const id = data.measurements?.[0];
