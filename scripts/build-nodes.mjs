@@ -11,6 +11,8 @@
  * offline never breaks a measurement — it only under-fills it, which the API
  * reports honestly as requested-vs-responded.
  */
+import { groupProbes } from "../src/probe-grouping.ts";
+
 const ATLAS = "https://atlas.ripe.net/api/v2";
 const RIPESTAT = "https://stat.ripe.net/data/as-overview/data.json";
 
@@ -282,28 +284,24 @@ const main = async () => {
   const probes = await fetchConnectedProbes();
   process.stderr.write(`${probes.length} connected probes\n`);
 
+  // The keying rule lives in ../src/probe-grouping.ts, which src/catalog.ts
+  // imports too: this build and the 3-hourly runtime sweep have to describe the
+  // same population, or a node's probe count changes meaning depending on which
+  // one produced it. Node strips the types and runs the module as it is.
+  //
+  // `cc` comes back lowercased, the form a node id uses. The emitted catalogue
+  // has always carried the upper-case code, and CN_NAMES, CONTINENT and
+  // PER_COUNTRY_OVERRIDES are all keyed that way, so it goes back up here.
   const groups = new Map();
-  for (const p of probes) {
-    const cc = p.country_code;
-    // Keyed by the v4 ASN only: a node id is `cc-<v4 ASN>`, so an IPv6-only
-    // probe (188 of them are) cannot be addressed by one. Falling back to the
-    // v6 ASN invented groups that resolve to nothing and inflated the IPv4
-    // count of any node that happens to share the number.
-    const asn = p.asn_v4;
-    // `?` is Atlas's placeholder for a probe it could not place; a `?-29802`
-    // node id fails `parseNodeId()`, which takes two-letter codes only.
-    if (!cc || cc === "?" || !asn) continue;
-    const id = `${cc.toLowerCase()}-${asn}`;
-    let g = groups.get(id);
-    if (!g) {
-      g = { id, cc, asn, probes: 0, probesV6: 0, asnV6: new Map() };
-      groups.set(id, g);
-    }
-    g.probes++;
-    if (p.asn_v6) {
-      g.probesV6++;
-      g.asnV6.set(p.asn_v6, (g.asnV6.get(p.asn_v6) ?? 0) + 1);
-    }
+  for (const g of groupProbes(probes).values()) {
+    groups.set(g.id, {
+      id: g.id,
+      cc: g.cc.toUpperCase(),
+      asn: g.asn,
+      probes: g.v4,
+      probesV6: g.v6,
+      asnV6: g.asnV6,
+    });
   }
 
   const byCountry = new Map();
@@ -337,13 +335,12 @@ const main = async () => {
       const holder = names.get(g.asn) ?? null;
       const operator = LABELS[g.asn] ?? holder ?? `AS${g.asn}`;
       const country = CN_NAMES[g.cc] ?? g.cc;
-      // Dominant v6 ASN inside the group; usually identical to the v4 one.
-      const asnV6 = [...g.asnV6.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
       return {
         id: g.id,
         cc: g.cc,
         asn: g.asn,
-        asnV6,
+        // Dominant v6 ASN inside the group; usually identical to the v4 one.
+        asnV6: g.asnV6,
         label: `${country} · ${operator}`,
         holder,
         continent: continentOf(g.cc),

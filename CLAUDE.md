@@ -160,8 +160,12 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   no IPv4 — KPN uses 1136 for both families, so `nl-1136` counted them, and
   `de-3320` advertised 316 where it has 310. Those probes stay reachable for
   `af: 6` on a catalogued node, which queries by v6 ASN and never reads these
-  counts. Both sweeps do this; `scripts/build-nodes.mjs` and `src/catalog.ts`
-  must agree.
+  counts. Both sweeps do this, and they no longer each say so: the rule is
+  `groupProbes()` in **`src/probe-grouping.ts`**, which `src/catalog.ts` and
+  `scripts/build-nodes.mjs` both import. Node runs the `.ts` from the `.mjs`
+  directly (native type stripping — no loader, no build step), so keep that
+  module erasable-syntax-only: no `enum`, no `namespace`, no parameter
+  properties.
 - **A batch that fails mid-pagination is retried from page one**, so probes
   already collected arrive a second time. Pools are deduplicated before they
   are counted or sampled — otherwise `available` inflates (600 reported as
@@ -217,9 +221,15 @@ So `data/cities.json` is ours, baked by `npm run cities:refresh`:
   that test is load-bearing: Kehl (DE, 35k) is 5 km from Strasbourg (FR, 274k),
   and merging across the border makes a German probe report a French city.
   Coverage is 96.7% of nameable probes, 100% in China.
-- The coverage report in the build script **mirrors the runtime rules on
-  purpose** — the same match radius, the same longitude reach, the same
-  `SINGLE_METRO` exception. When they drift it stops measuring what ships.
+- The coverage report in the build script runs **the runtime rule itself** —
+  `nearestCity()` in **`src/geo-math.ts`**, imported by both `src/geo.ts` and
+  `scripts/build-cities.mjs`, along with the match radius, the longitude reach
+  and the `SINGLE_METRO` exception. It used to be a second copy that "mirrors"
+  it, and the copies had already drifted: on a tie the script moved to any row
+  in the probe's country, where the runtime moves only when the incumbent is
+  not already in it. Narrow, but it meant the coverage number described a
+  lookup that did not ship. Same erasable-syntax-only constraint as
+  `src/probe-grouping.ts`.
 - **The GeoNames credit is a licence obligation, not decoration.** cities15000
   is CC BY 4.0 and `data/cities.json` redistributes a derived copy, so the
   attribution travels in the file itself and appears in the console footer. It
@@ -384,6 +394,8 @@ data/nodes.json        generated node catalogue + label tables + policy
 data/cities.json       generated coordinate → city-name table
 scripts/build-nodes.mjs  regenerates data/nodes.json from live Atlas data
 scripts/build-cities.mjs regenerates data/cities.json (China by hand, rest GeoNames)
+                         both import the shared rules below, so a build cannot
+                         describe a different population from the runtime
 
 src/index.ts           route assembly, error handling, DO exports, cron
 src/routes/probe.ts    create + results + the quota chain, in that order
@@ -400,6 +412,8 @@ src/aggregate.ts       group results by node, delegate parsing to the kind
 src/dns.ts             base64 abuf → records
 src/x509.ts            DER → certificate fields
 src/geo.ts             probe coordinates → city name
+src/geo-math.ts        the nearest-city rule — shared with build-cities.mjs
+src/probe-grouping.ts  probes → cc-asn groups — shared with build-nodes.mjs
 src/describe.ts        the Atlas-side label (cosmetic)
 
 test/                  vitest; fixtures are real captured data, see below

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildIndex, nearestCity, type CityRow } from "../src/geo-math";
 import { cityFor, cityOf, cityOfProbe } from "../src/geo";
 
 /**
@@ -168,5 +169,46 @@ describe("cityOfProbe", () => {
     expect(cityOfProbe(undefined)).toBeNull();
     expect(cityOfProbe(null)).toBeNull();
     expect(cityOfProbe({ id: 4 })).toBeNull();
+  });
+});
+
+describe("nearestCity tie-break", () => {
+  /**
+   * The rule that had silently drifted. `src/geo.ts` only moves the pick on a
+   * tie when the incumbent is *not* already in the probe's country;
+   * `scripts/build-cities.mjs` moved whenever the challenger was in it, so a
+   * third equidistant row displaced the first for no reason. Same radius, same
+   * reach, different answer — and the script is what reports coverage, so the
+   * number in CLAUDE.md described a lookup that did not ship.
+   *
+   * Both now call this one function. This pins which way it goes.
+   */
+  const rows: CityRow[] = [
+    [499000, 100000, "DE", "南边"],
+    [501000, 100000, "DE", "北边"],
+  ];
+
+  it("keeps the first of two equally close cities in the same country", () => {
+    const idx = buildIndex(rows);
+    const a = nearestCity(idx, 50.0, 10.0, "DE", 50);
+    // Reversing the input must not reverse the answer's *rule* — whichever row
+    // the scan reaches first stays put, rather than the last one winning.
+    const b = nearestCity(buildIndex([...rows].reverse()), 50.0, 10.0, "DE", 50);
+    expect(a?.[3]).toBe("南边");
+    expect(b?.[3]).toBe("南边");
+  });
+
+  it("still crosses to the probe's own country on a tie", () => {
+    const idx = buildIndex([
+      [499000, 100000, "FR", "法国那边"],
+      [501000, 100000, "DE", "德国这边"],
+    ]);
+    expect(nearestCity(idx, 50.0, 10.0, "DE", 50)?.[3]).toBe("德国这边");
+  });
+
+  it("respects the radius it is handed, not a baked-in one", () => {
+    const idx = buildIndex([[501000, 100000, "DE", "北边"]]);
+    expect(nearestCity(idx, 50.0, 10.0, "DE", 50)?.[3]).toBe("北边");
+    expect(nearestCity(idx, 50.0, 10.0, "DE", 5)).toBeNull();
   });
 });
