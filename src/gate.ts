@@ -75,6 +75,27 @@ export async function releaseCredits(
  * reservation. Without this the two ledgers disagree — the platform is made
  * whole and the caller is charged for a measurement that does not exist.
  */
+/**
+ * Whether a failed create should hand the caller's credits back.
+ *
+ * Pulled out of the `catch` so it can be tested, because the version inside it
+ * could not be and shipped a P1: gating on "Atlas refused" alone denied the
+ * refund to a caller rejected by the daily budget, whose request never reached
+ * Atlas at all. This is billing code with two ways to be wrong in opposite
+ * directions, which is the worst possible shape to leave unexamined.
+ *
+ * - `charged` — `rateCheck` actually took the credits. Nothing to return if not.
+ * - `attempted` — the POST was sent. Before it, no measurement can exist.
+ * - `rejected` — Atlas read the request and refused it (4xx). Nothing was made.
+ *
+ * The gap left open on purpose is a delivered POST with an unknown outcome: the
+ * measurement may exist and be spending, so the charge stands. The platform's
+ * own ledger tolerates that because `DailyBudget` reconciles against Atlas;
+ * the caller's cannot, so it is the one that must not guess.
+ */
+export const shouldRefund = (charged: boolean, attempted: boolean, rejected: boolean): boolean =>
+  charged && (!attempted || rejected);
+
 export async function refundCredits(
   env: Env,
   caller: Caller,

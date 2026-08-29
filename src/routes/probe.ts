@@ -16,6 +16,7 @@ import {
   releaseCredits,
   reserveCredits,
   settleMeasurement,
+  shouldRefund,
   type Caller,
 } from "../gate";
 import { kindFor } from "../measurements";
@@ -177,7 +178,7 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     // that ambiguity because `DailyBudget` reconciles against Atlas every ten
     // minutes, and the caller's has no such correction, so it is the one that
     // must not guess.
-    if (take?.ok && (!attempted || atlasRejected(err))) {
+    if (take && shouldRefund(take.ok, attempted, atlasRejected(err))) {
       await refundCredits(env, caller, credits, take.day);
     }
     throw err;

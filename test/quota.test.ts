@@ -8,6 +8,7 @@ import {
   publicDailyCredits,
   sha256Hex,
 } from "../src/quota";
+import { shouldRefund } from "../src/gate";
 import { NODE_PRESETS } from "../src/nodes";
 
 /**
@@ -131,5 +132,36 @@ describe("sha256Hex", () => {
     );
     await expect(sha256Hex("")).resolves.toHaveLength(64);
     expect(await sha256Hex("1.2.3.4")).not.toBe(await sha256Hex("1.2.3.5"));
+  });
+});
+
+/**
+ * The refund decision, which shipped a P1 in the one form it could not be
+ * tested in. Two ways to be wrong in opposite directions: refunding a
+ * measurement that exists bills nobody for a run that is spending, and
+ * withholding from one that does not charges a caller for nothing.
+ */
+describe("shouldRefund", () => {
+  it("returns nothing when nothing was charged", () => {
+    // `rateCheck` failing is what rejects the request; it takes no credits.
+    expect(shouldRefund(false, false, false)).toBe(false);
+    expect(shouldRefund(false, true, true)).toBe(false);
+  });
+
+  it("refunds a failure that never reached Atlas", () => {
+    // The case the first version broke: `rejectBudget()` throws several lines
+    // above the POST, so no measurement can exist, but the error carries no
+    // Atlas rejection marker because Atlas was never asked.
+    expect(shouldRefund(true, false, false)).toBe(true);
+  });
+
+  it("refunds a request Atlas read and refused", () => {
+    expect(shouldRefund(true, true, true)).toBe(true);
+  });
+
+  it("keeps the charge when the POST went out and the outcome is unknown", () => {
+    // A body that would not read, JSON that would not parse, a 5xx, a 2xx with
+    // no id. The measurement may exist and may be spending.
+    expect(shouldRefund(true, true, false)).toBe(false);
   });
 });
