@@ -193,7 +193,10 @@ describe("what the reader opened survives a poll", () => {
     // `i` is the render index and reorders as results arrive; the probe id and
     // the answer signature do not.
     expect(APP).toContain('data-k="hops:${esc(p.probeId)}"');
-    expect(APP).toContain('data-k="ans:${esc(key)}"');
+    // The first record, never the whole answer: the answer grows while the run
+    // is still arriving, and a key that grows with it is not a key.
+    expect(APP).toContain('data-k="ans:${esc(records[0])}"');
+    expect(APP).not.toMatch(/data-k="ans:\$\{esc\(key\)\}"/);
   });
 
   it("render() collects the open keys before it overwrites, and reapplies after", () => {

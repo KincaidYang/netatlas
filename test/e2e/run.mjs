@@ -91,7 +91,15 @@ const stub = {
     groups: [{
       key: "cn-4134", label: "中国 · 电信", requested: 9, responded: counters[2],
       summary: {
-        distinctAnswers: ["A 1.1.1.1", "A 2.2.2.2", "A 3.3.3.3", "A 4.4.4.4", "A 5.5.5.5"],
+        // Grows with each poll, because that is what a real run does: a node's
+        // `distinctAnswers` is the union over its probes, and they report at
+        // different times. A constant list here is what let a key derived from
+        // the whole answer look stable when it was not.
+        distinctAnswers: [
+          "A 1.1.1.1", "A 2.2.2.2", "A 3.3.3.3", "A 4.4.4.4",
+          ...(counters[2] >= 2 ? ["A 5.5.5.5"] : []),
+          ...(counters[2] >= 3 ? ["A 6.6.6.6"] : []),
+        ],
         ttl: { min: 60, max: 60 }, rttMs: { avg: 12 },
       },
       probes: [{

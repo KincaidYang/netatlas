@@ -857,11 +857,26 @@ function answerView(report) {
    * growing with the size of the answer.
    */
   const INLINE = 3;
-  const display = (records, key) => {
+  /**
+   * Keyed by the first record, not by the whole answer.
+   *
+   * A node's `distinctAnswers` is the union across its probes, so while a run
+   * is still arriving a fifth address joins the four already on screen and the
+   * bucket signature changes — which closed the block the reader had open, the
+   * exact thing `data-k` exists to prevent. Found by review, not by the test:
+   * the fixture answered with a constant list, and a constant cannot grow.
+   *
+   * The records are sorted, so the first one survives an append and survives
+   * new nodes joining the bucket. A record that sorts ahead of it still moves
+   * the key, and two buckets sharing a first record both reopen — an
+   * over-restore, which costs the reader nothing, where the old key cost them
+   * their place.
+   */
+  const display = (records) => {
     const parts = strip(records);
     if (parts.length <= INLINE) return esc(parts.join(", "));
     return (
-      `<details class="more" data-k="ans:${esc(key)}">` +
+      `<details class="more" data-k="ans:${esc(records[0])}">` +
       `<summary>${parts.length} 个地址 · ${esc(parts[0])} …</summary>` +
       `${esc(parts.join(", "))}</details>`
     );
@@ -870,7 +885,7 @@ function answerView(report) {
   return (
     verdict +
     sorted
-      .map(([sig, b], i) => {
+      .map(([, b], i) => {
         const ttl =
           b.ttlMin === null
             ? ""
@@ -881,7 +896,7 @@ function answerView(report) {
             ? `其余 ${b.who.length} 个节点`
             : `${b.who.length} 个节点 · ${who(b.who)}`;
         return (
-          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${display(b.records, sig)}</div>` +
+          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${display(b.records)}</div>` +
           `<div class="who" title="${esc(b.who.join("、"))}">${esc(label)}${esc(ttl)}</div></div>`
         );
       })
