@@ -169,3 +169,44 @@ describe("console thresholds match what CLAUDE.md claims", () => {
     expect(DOC.replace(/\s+/g, " ")).toMatch(/an hour of clock staleness and fourteen days of certificate/);
   });
 });
+
+/**
+ * A poll rewrites `#out` wholesale every three seconds. The order of the rows
+ * is frozen while a run is still arriving (`state.order`); the disclosure state
+ * has to be frozen for the same reason and was not, so a reader who opened a
+ * traceroute's hop list got it closed under them on the next poll.
+ *
+ * Restoring it needs two halves that live 400 lines apart: every `<details>`
+ * has to carry a content-stable key, and `render()` has to collect the open
+ * ones before it overwrites and reapply them after. Either half alone silently
+ * does nothing, which is why both are pinned here rather than described in a
+ * comment.
+ */
+describe("what the reader opened survives a poll", () => {
+  it("every disclosure carries a key", () => {
+    const all = [...APP.matchAll(/<details\b[^>]*/g)].map((m) => m[0]);
+    expect(all.length, "no <details> found — did the markup move?").toBeGreaterThan(0);
+    for (const tag of all) expect(tag, `<details> without data-k: ${tag}`).toContain("data-k=");
+  });
+
+  it("the keys are content-stable, not positions", () => {
+    // `i` is the render index and reorders as results arrive; the probe id and
+    // the answer signature do not.
+    expect(APP).toContain('data-k="hops:${esc(p.probeId)}"');
+    expect(APP).toContain('data-k="ans:${esc(key)}"');
+  });
+
+  it("render() collects the open keys before it overwrites, and reapplies after", () => {
+    const body = /function render\(report, id\) \{([\s\S]*?)\n\}\n/.exec(APP);
+    expect(body, "render() not found in public/app.js").toBeTruthy();
+    const src = body![1];
+    const collect = src.indexOf("details[data-k][open]");
+    const write = src.indexOf('$("out").innerHTML =');
+    const restore = src.lastIndexOf("d.open = true");
+    expect(collect, "render() never reads the open disclosures").toBeGreaterThan(-1);
+    expect(restore, "render() never reopens them").toBeGreaterThan(-1);
+    // Reading after the overwrite reads an empty container: order is the point.
+    expect(collect).toBeLessThan(write);
+    expect(write).toBeLessThan(restore);
+  });
+});

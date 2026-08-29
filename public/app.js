@@ -677,7 +677,21 @@ function render(report, id) {
 
   const body = LATENCY_TYPES.has(report.type) ? latencyView(report, groups) : answerView(report);
   const detail = view === "table" ? tableView(groups, report.type) : groups.map(sheet).join("");
+  // A poll rewrites this whole block every three seconds, so anything the
+  // reader had opened — a traceroute's hop list, a long DNS answer — snapped
+  // shut under them. That is the same complaint `state.order` above answers
+  // for row order: results arrive over minutes, and the reader is mid-sentence.
+  // Keys are content-stable (probe id, answer signature), not positions, so a
+  // node that arrives late reorders without pulling the disclosure with it.
+  const opened = new Set(
+    [...$("out").querySelectorAll("details[data-k][open]")].map((d) => d.dataset.k),
+  );
   $("out").innerHTML = head + body + detail + cliHint(report, id);
+  if (opened.size) {
+    for (const d of $("out").querySelectorAll("details[data-k]")) {
+      if (opened.has(d.dataset.k)) d.open = true;
+    }
+  }
 
   for (const btn of document.querySelectorAll("[data-view]")) {
     btn.addEventListener("click", () => {
@@ -843,11 +857,12 @@ function answerView(report) {
    * growing with the size of the answer.
    */
   const INLINE = 3;
-  const display = (records) => {
+  const display = (records, key) => {
     const parts = strip(records);
     if (parts.length <= INLINE) return esc(parts.join(", "));
     return (
-      `<details class="more"><summary>${parts.length} 个地址 · ${esc(parts[0])} …</summary>` +
+      `<details class="more" data-k="ans:${esc(key)}">` +
+      `<summary>${parts.length} 个地址 · ${esc(parts[0])} …</summary>` +
       `${esc(parts.join(", "))}</details>`
     );
   };
@@ -855,7 +870,7 @@ function answerView(report) {
   return (
     verdict +
     sorted
-      .map(([, b], i) => {
+      .map(([sig, b], i) => {
         const ttl =
           b.ttlMin === null
             ? ""
@@ -866,7 +881,7 @@ function answerView(report) {
             ? `其余 ${b.who.length} 个节点`
             : `${b.who.length} 个节点 · ${who(b.who)}`;
         return (
-          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${display(b.records)}</div>` +
+          `<div class="answer${i > 0 ? " alt" : ""}"><div class="val">${display(b.records, sig)}</div>` +
           `<div class="who" title="${esc(b.who.join("、"))}">${esc(label)}${esc(ttl)}</div></div>`
         );
       })
@@ -1382,7 +1397,8 @@ function probeBody(p, labelled, odd) {
 
   const dl = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
   const raw = d.hops
-    ? `<details class="raw"><summary>逐跳</summary><pre>${esc(
+    ? `<details class="raw" data-k="hops:${esc(p.probeId)}">` +
+      `<summary>逐跳</summary><pre>${esc(
         d.hops
           .map((h) => {
             // Every hop is probed several times. A hop that answered once out
