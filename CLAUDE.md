@@ -165,7 +165,10 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   `scripts/build-nodes.mjs` both import. Node runs the `.ts` from the `.mjs`
   directly (native type stripping — no loader, no build step), so keep that
   module erasable-syntax-only: no `enum`, no `namespace`, no parameter
-  properties.
+  properties. Stripping is unflagged only from **Node 22.18**, which
+  `package.json` now declares in `engines`: on Node 20 both `nodes:refresh`
+  and `cities:refresh` die with `ERR_UNKNOWN_FILE_EXTENSION`, and the import
+  fails before any code in the script can explain why.
 - **A batch that fails mid-pagination is retried from page one**, so probes
   already collected arrive a second time. Pools are deduplicated before they
   are counted or sampled — otherwise `available` inflates (600 reported as
