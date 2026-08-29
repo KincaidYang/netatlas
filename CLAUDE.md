@@ -476,6 +476,11 @@ and `POST` for http (which can only target anchors anyway).
 
 - `npm run dev` — `wrangler dev` (needs `.dev.vars` with `ATLAS_API_KEY`)
 - `npm test` — vitest, pure functions only (no Workers pool, no network)
+- `npm run test:e2e` — browser regression for the console, against a real
+  Chromium. Stubbed by default (no Atlas key, no credits); pass a base URL and
+  a **still-running** measurement id to run the same assertions against live
+  data. Needs `npx playwright install chromium` once. Kept out of `npm test` so
+  that stays pure and loopable
 - `npm run typecheck` — `tsc --noEmit`, covers `test/` too
 - `npm run nodes:refresh` — regenerate `data/nodes.json`, then commit it
 - `npm run cities:refresh` — regenerate `data/cities.json`, then commit it. Prints

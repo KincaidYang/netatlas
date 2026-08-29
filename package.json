@@ -11,13 +11,15 @@
     "typecheck": "tsc --noEmit",
     "cf-typegen": "wrangler types",
     "nodes:refresh": "node scripts/build-nodes.mjs > data/nodes.json",
-    "cities:refresh": "node scripts/build-cities.mjs > data/cities.json"
+    "cities:refresh": "node scripts/build-cities.mjs > data/cities.json",
+    "test:e2e": "node test/e2e/run.mjs"
   },
   "dependencies": {
     "hono": "^4.6.14"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
+    "playwright": "^1.62.1",
     "typescript": "^5.7.2",
     "vitest": "^4.1.11",
     "wrangler": "^4.0.0"
