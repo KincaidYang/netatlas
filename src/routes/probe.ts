@@ -161,9 +161,20 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     attempted = true;
     measurementId = await new AtlasClient(caller.atlasKey).createMeasurement(definition, selection.probes);
   } catch (err) {
+    // Both ledgers get their own chance, and neither gets to hide the failure
+    // that brought us here.
+    //
+    // These used to run in sequence, straight from the `catch`. A BUDGET
+    // Durable Object having a bad minute would then throw out of
+    // `releaseCredits`, skip the caller's refund entirely — the classification
+    // above becoming decorative exactly when it is needed — and replace the
+    // original error with the cleanup's, so the response explained the wrong
+    // problem. `allSettled` because one ledger failing to be tidied is not a
+    // reason to leave the other untouched.
+    //
     // Only give credits back if they were actually reserved — a ticket is
     // proof of that; without one this just hands the claim back.
-    await releaseCredits(env, ticket ? credits : 0, ticket, key);
+    const cleanup = [releaseCredits(env, ticket ? credits : 0, ticket, key)];
     // And to the caller's own allowance, which `rateCheck` charged before the
     // create was attempted. Both ledgers or neither: billing one side for a
     // measurement that does not exist is the asymmetry this pairs up.
@@ -181,8 +192,9 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     // minutes, and the caller's has no such correction, so it is the one that
     // must not guess.
     if (take && shouldRefund(take.ok, attempted, noMeasurementCreated(err))) {
-      await refundCredits(env, caller, credits, take.day);
+      cleanup.push(refundCredits(env, caller, credits, take.day));
     }
+    await Promise.allSettled(cleanup);
     throw err;
   }
 
