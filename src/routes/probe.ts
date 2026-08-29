@@ -128,6 +128,7 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
   let measurementId: number;
   let selection: Awaited<ReturnType<typeof resolveNodes>>;
   let take: Awaited<ReturnType<typeof rateCheck>> | undefined;
+  let attempted = false;
   try {
     // Reads are public, so node resolution always uses the platform key.
     selection = await resolveNodes(
@@ -151,6 +152,10 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     }
 
     const definition = kind.buildDefinition(params, buildDescription(kind.type, String(body.target ?? "")));
+    // Everything above this line fails with nothing sent to Atlas — a budget
+    // rejection, a definition that would not build. Only past it can a
+    // measurement exist that we failed to hear about.
+    attempted = true;
     measurementId = await new AtlasClient(caller.atlasKey).createMeasurement(definition, selection.probes);
   } catch (err) {
     // Only give credits back if they were actually reserved — a ticket is
@@ -159,13 +164,22 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     // And to the caller's own allowance, which `rateCheck` charged before the
     // create was attempted. Both ledgers or neither: billing one side for a
     // measurement that does not exist is the asymmetry this pairs up.
-    // Only when Atlas is known to have refused. If the POST was delivered and
-    // the failure came afterwards — a body that would not read, JSON that would
-    // not parse — the measurement may exist and be spending, and handing the
-    // credits back would bill nobody for it. The platform's own ledger survives
+    // Refund unless the measurement might exist.
+    //
+    // Two ways it definitely does not: the failure came before anything was
+    // sent, or Atlas read the request and refused it. Gating on the second
+    // alone was a narrowing that broke the first — a caller whose request was
+    // turned away by the daily budget lost the allowance anyway, for a
+    // measurement that never got near Atlas.
+    //
+    // The remaining window is a POST that was delivered and whose outcome we
+    // never learned. There the charge stands: the platform's ledger survives
     // that ambiguity because `DailyBudget` reconciles against Atlas every ten
-    // minutes; the caller's does not, so it errs toward keeping the charge.
-    if (take?.ok && atlasRejected(err)) await refundCredits(env, caller, credits, take.day);
+    // minutes, and the caller's has no such correction, so it is the one that
+    // must not guess.
+    if (take?.ok && (!attempted || atlasRejected(err))) {
+      await refundCredits(env, caller, credits, take.day);
+    }
     throw err;
   }
 

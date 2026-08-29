@@ -81,19 +81,21 @@ export class AtlasClient {
     });
     const body = await res.text();
     if (!res.ok) {
-      // The only failure here that proves nothing was created. Everything else
-      // in this method — a fetch that never returned, a body that would not
-      // read, JSON that would not parse, a 2xx with no id — happens with the
-      // POST already delivered, and Atlas may well have created and billed the
-      // measurement. `atlasRejected` is how the caller tells those apart
-      // before handing credits back.
+      // A 4xx is Atlas refusing the request: it read it, rejected it, and
+      // created nothing. A 5xx is not — Atlas may have persisted the
+      // measurement and then failed on the way out, so it belongs with the
+      // other ambiguous outcomes here (a fetch that never returned, a body that
+      // would not read, JSON that would not parse, a 2xx with no id), all of
+      // which leave a measurement that may exist and may be spending.
+      // `atlasRejected` is how the caller tells the two apart before handing
+      // credits back.
       // Pass Atlas's own wording through — it is far more useful than ours
       // (e.g. "Only anchors may be targeted", quota and concurrency errors).
       throw Object.assign(
         new HTTPException(res.status === 400 ? 400 : 502, {
           message: `atlas create failed (${res.status}): ${body.slice(0, 400)}`,
         }),
-        { [ATLAS_REJECTED]: true },
+        { [ATLAS_REJECTED]: res.status >= 400 && res.status < 500 },
       );
     }
     const data = JSON.parse(body) as { measurements?: number[] };
