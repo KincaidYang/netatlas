@@ -36,16 +36,26 @@ export interface ProbeQuery {
  * key. We still send the key when we have one, for the higher rate limits.
  */
 /**
- * Marks a create that Atlas refused outright — the request was delivered, the
- * answer was an error, and no measurement exists. Only then is it safe to give
- * the caller their credits back: refunding an ambiguous failure charges nobody
- * for a measurement that is running, which is the same disagreement between the
- * two ledgers as the bug that added the refund, pointing the other way.
+ * Marks an error that proves no measurement exists.
+ *
+ * Two ways to earn it: the request never left this Worker, or Atlas read it and
+ * refused it with a 4xx. Only then is it safe to give the caller their credits
+ * back — refunding an ambiguous failure charges nobody for a measurement that
+ * is running, which is the same disagreement between the two ledgers as the bug
+ * that added the refund, pointing the other way.
+ *
+ * It says "no measurement", not "Atlas rejected", because the caller cannot see
+ * where inside this client the failure happened. Naming it after the Atlas
+ * answer is what hid the missing-key case: that throw is before `fetch`, so
+ * nothing was sent, and an earlier version kept the charge for it.
  */
-const ATLAS_REJECTED = Symbol.for("netatlas.atlasRejected");
+const NO_MEASUREMENT = Symbol.for("netatlas.noMeasurement");
 
-export const atlasRejected = (e: unknown): boolean =>
-  typeof e === "object" && e !== null && (e as Record<symbol, unknown>)[ATLAS_REJECTED] === true;
+const certainly = <E extends object>(e: E, no: boolean): E =>
+  Object.assign(e, { [NO_MEASUREMENT]: no });
+
+export const noMeasurementCreated = (e: unknown): boolean =>
+  typeof e === "object" && e !== null && (e as Record<symbol, unknown>)[NO_MEASUREMENT] === true;
 
 export class AtlasClient {
   constructor(private readonly apiKey?: string) {}
@@ -73,7 +83,13 @@ export class AtlasClient {
     definition: Record<string, unknown>,
     probes: ProbeSelectionGroup[],
   ): Promise<number> {
-    if (!this.apiKey) throw new HTTPException(500, { message: "no Atlas API key configured" });
+    // Before `fetch`, so nothing was sent and nothing can exist. Deterministic
+    // too: it fails the same way until the secret is restored, and a caller
+    // whose credits were kept for it would stay short for the rest of the day
+    // over a deployment mistake they did not make.
+    if (!this.apiKey) {
+      throw certainly(new HTTPException(500, { message: "no Atlas API key configured" }), true);
+    }
     const res = await fetch(`${ATLAS_BASE}/measurements/`, {
       method: "POST",
       headers: this.headers(true),
@@ -91,11 +107,11 @@ export class AtlasClient {
       // credits back.
       // Pass Atlas's own wording through — it is far more useful than ours
       // (e.g. "Only anchors may be targeted", quota and concurrency errors).
-      throw Object.assign(
+      throw certainly(
         new HTTPException(res.status === 400 ? 400 : 502, {
           message: `atlas create failed (${res.status}): ${body.slice(0, 400)}`,
         }),
-        { [ATLAS_REJECTED]: res.status >= 400 && res.status < 500 },
+        res.status >= 400 && res.status < 500,
       );
     }
     const data = JSON.parse(body) as { measurements?: number[] };

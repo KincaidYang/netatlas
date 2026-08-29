@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { aggregate } from "../aggregate";
-import { AtlasClient, atlasRejected } from "../atlas";
+import { AtlasClient, noMeasurementCreated } from "../atlas";
 import { buildDescription } from "../describe";
 import {
   QUOTA,
@@ -154,8 +154,10 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
 
     const definition = kind.buildDefinition(params, buildDescription(kind.type, String(body.target ?? "")));
     // Everything above this line fails with nothing sent to Atlas — a budget
-    // rejection, a definition that would not build. Only past it can a
-    // measurement exist that we failed to hear about.
+    // rejection, a definition that would not build. Past it a measurement may
+    // exist that we never heard about, *unless* the client says otherwise:
+    // `createMeasurement` has its own pre-`fetch` check, which this boundary
+    // cannot see from out here, so the error carries that fact itself.
     attempted = true;
     measurementId = await new AtlasClient(caller.atlasKey).createMeasurement(definition, selection.probes);
   } catch (err) {
@@ -178,7 +180,7 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     // that ambiguity because `DailyBudget` reconciles against Atlas every ten
     // minutes, and the caller's has no such correction, so it is the one that
     // must not guess.
-    if (take && shouldRefund(take.ok, attempted, atlasRejected(err))) {
+    if (take && shouldRefund(take.ok, attempted, noMeasurementCreated(err))) {
       await refundCredits(env, caller, credits, take.day);
     }
     throw err;

@@ -85,16 +85,22 @@ export async function releaseCredits(
  * directions, which is the worst possible shape to leave unexamined.
  *
  * - `charged` — `rateCheck` actually took the credits. Nothing to return if not.
- * - `attempted` — the POST was sent. Before it, no measurement can exist.
- * - `rejected` — Atlas read the request and refused it (4xx). Nothing was made.
+ * - `attempted` — the create call was reached. Before it, nothing can exist.
+ * - `provablyNotCreated` — the error itself proves nothing was made: the request
+ *   never left the Worker, or Atlas read it and refused it with a 4xx. This is
+ *   what covers the failures inside the create call that `attempted` is too
+ *   coarse to see, such as a missing API key throwing before `fetch`.
  *
  * The gap left open on purpose is a delivered POST with an unknown outcome: the
  * measurement may exist and be spending, so the charge stands. The platform's
  * own ledger tolerates that because `DailyBudget` reconciles against Atlas;
  * the caller's cannot, so it is the one that must not guess.
  */
-export const shouldRefund = (charged: boolean, attempted: boolean, rejected: boolean): boolean =>
-  charged && (!attempted || rejected);
+export const shouldRefund = (
+  charged: boolean,
+  attempted: boolean,
+  provablyNotCreated: boolean,
+): boolean => charged && (!attempted || provablyNotCreated);
 
 export async function refundCredits(
   env: Env,

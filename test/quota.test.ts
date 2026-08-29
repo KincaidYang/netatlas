@@ -9,6 +9,7 @@ import {
   sha256Hex,
 } from "../src/quota";
 import { shouldRefund } from "../src/gate";
+import { AtlasClient, noMeasurementCreated } from "../src/atlas";
 import { NODE_PRESETS } from "../src/nodes";
 
 /**
@@ -163,5 +164,26 @@ describe("shouldRefund", () => {
     // A body that would not read, JSON that would not parse, a 5xx, a 2xx with
     // no id. The measurement may exist and may be spending.
     expect(shouldRefund(true, true, false)).toBe(false);
+  });
+});
+
+/**
+ * The classification `shouldRefund` depends on. Getting this wrong is invisible
+ * from `shouldRefund`'s own tests, which take the boolean as given — and it has
+ * been wrong twice: once treating a 5xx as proof of refusal, once missing that
+ * the client can fail before it sends anything.
+ */
+describe("noMeasurementCreated", () => {
+  it("is true when the request never left the Worker", async () => {
+    // No key configured — this throws before `fetch`, so no POST exists. A
+    // deployment that lost its secret must not also eat the caller's quota.
+    const err = await new AtlasClient(undefined).createMeasurement({}, []).catch((e) => e);
+    expect(noMeasurementCreated(err)).toBe(true);
+  });
+
+  it("is false for an error carrying no verdict", () => {
+    expect(noMeasurementCreated(new Error("socket hang up"))).toBe(false);
+    expect(noMeasurementCreated(null)).toBe(false);
+    expect(noMeasurementCreated(undefined)).toBe(false);
   });
 });
