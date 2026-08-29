@@ -198,7 +198,11 @@ describe("what the reader opened survives a poll", () => {
     // an address, the first record moves when one sorts ahead of it — so the
     // restore matches by containment instead, and that is what is pinned here.
     expect(APP).toContain("state.answers.set(k, records)");
-    expect(APP).toMatch(/openedSets\.some\(\(was\) => was\.every\(/);
+    // Containment, and one successor per predecessor. Both halves matter: the
+    // predicate alone reopened every bucket that happened to contain what was
+    // open, which expands answers the reader never touched.
+    expect(APP).toMatch(/was\.records\.every\(\(r\) => recs\.includes\(r\)\)/);
+    expect(APP).toContain("taken.add(best)");
     expect(APP).not.toContain('data-k="ans:${esc(records[0])}"');
   });
 

@@ -692,23 +692,53 @@ function render(report, id) {
   const opened = new Set(
     sameRun ? [...$("out").querySelectorAll("details[data-k][open]")].map((d) => d.dataset.k) : [],
   );
-  const openedSets = [...opened].map((k) => state.answers?.get(k)).filter(Boolean);
+  const openedSets = [...opened]
+    .map((k) => ({ key: k, records: state.answers?.get(k) }))
+    .filter((e) => e.records);
 
   const body = LATENCY_TYPES.has(report.type) ? latencyView(report, groups) : answerView(report);
   const detail = view === "table" ? tableView(groups, report.type) : groups.map(sheet).join("");
   $("out").innerHTML = head + body + detail + cliHint(report, id);
   state.shown = id;
   if (opened.size) {
-    for (const d of $("out").querySelectorAll("details[data-k]")) {
-      // A probe id is already an identity and never changes. An answer is a
-      // growing set, so it is matched by containment instead: the block that
-      // still holds everything the reader was reading is the same block.
+    const blocks = [...$("out").querySelectorAll("details[data-k]")];
+    const taken = new Set();
+
+    // A probe id is already an identity and never changes, and an answer that
+    // did not grow still matches its own key. Both are exact, so they go first
+    // and take their block out of the running.
+    for (const d of blocks) {
       if (opened.has(d.dataset.k)) {
         d.open = true;
-        continue;
+        taken.add(d);
       }
-      const recs = state.answers?.get(d.dataset.k);
-      if (recs && openedSets.some((was) => was.every((r) => recs.includes(r)))) d.open = true;
+    }
+
+    // What is left is an answer that grew. Containment finds it — but one
+    // disclosure the reader opened must reopen exactly one, and the predicate
+    // alone does not say that: with one node still on `[A,B,C,D]` and another
+    // grown to `[A,B,C,D,E]`, both contain what was open and both sprang open.
+    // I had called that over-restore harmless twice; it puts a node's answer on
+    // screen expanded that the reader never touched. The smallest superset is
+    // the successor — anything larger contains it too, and would be claimed by
+    // its own predecessor if it had one.
+    for (const was of openedSets) {
+      if (opened.has(was.key) && blocks.some((d) => d.dataset.k === was.key)) continue;
+      let best = null;
+      let bestSize = Infinity;
+      for (const d of blocks) {
+        if (taken.has(d)) continue;
+        const recs = state.answers?.get(d.dataset.k);
+        if (!recs || recs.length >= bestSize) continue;
+        if (was.records.every((r) => recs.includes(r))) {
+          best = d;
+          bestSize = recs.length;
+        }
+      }
+      if (best) {
+        best.open = true;
+        taken.add(best);
+      }
     }
   }
 

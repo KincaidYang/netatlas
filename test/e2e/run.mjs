@@ -71,7 +71,7 @@ const hops = (n) =>
  * tick is a real re-render — the thing under test. A fixture that returned a
  * finished measurement would render once and prove nothing.
  */
-const counters = { 1: 0, 2: 0, 3: 0 };
+const counters = { 1: 0, 2: 0, 3: 0, 4: 0 };
 const stub = {
   1: () => ({
     measurementId: 1, type: "traceroute", target: "example.com", queryType: null,
@@ -100,6 +100,30 @@ const stub = {
       }],
     }],
   }),
+  // Two nodes that start with the same answer — one bucket, one disclosure —
+  // and then one of them grows. The reader opened the shared block; afterwards
+  // there are two, and the grown one contains everything the opened one held.
+  // Containment alone reopens both, which expands a node's answer nobody
+  // touched. Exactly one must come back open.
+  4: () => {
+    const n = ++counters[4];
+    const base = ["A 1.1.1.1", "A 2.2.2.2", "A 3.3.3.3", "A 4.4.4.4"];
+    const grown = n >= 2 ? [...base, "A 5.5.5.5"] : base;
+    const group = (key, label, answers) => ({
+      key, label, requested: 1, responded: 1,
+      summary: { distinctAnswers: answers, ttl: { min: 60, max: 60 }, rttMs: { avg: 12 } },
+      probes: [{
+        probeId: key === "cn-4134" ? 4001 : 4002,
+        ok: true, rttMs: 12, city: "北京", asn: 4134, country: "CN",
+        detail: { answers: answers.map((r) => ({ type: "A", data: r.split(" ")[1], ttl: 60 })) },
+      }],
+    });
+    return {
+      measurementId: 4, type: "dns", target: "two.example", queryType: "A",
+      status: "Ongoing", totalRequested: 9, totalResponded: n,
+      groups: [group("cn-4134", "中国 · 电信", base), group("hk-4760", "香港 · HKT", grown)],
+    };
+  },
   2: () => ({
     measurementId: 2, type: "dns", target: "example.com", queryType: "A",
     status: "Ongoing", totalRequested: 9, totalResponded: ++counters[2],
@@ -304,6 +328,54 @@ async function doesNotLeakAcrossRuns(browser, base) {
   });
 }
 
+/**
+ * One disclosure the reader opened must reopen exactly one.
+ *
+ * Containment is the right test for "is this the same block", but it is not by
+ * itself a one-to-one match: every bucket that grew past the opened one also
+ * contains it. I called that over-restore harmless twice before measuring it.
+ */
+async function reopensExactlyOne(browser, base) {
+  const name = "一个展开只还原一个";
+  const page = await browser.newPage();
+  await stubRoutes(page);
+  await page.goto(`${base}/?m=4`);
+  const d = page.locator("details.more").first();
+  try {
+    await d.waitFor({ timeout: 30000 });
+  } catch {
+    results.push({ name, simple: true, ok: false, detail: "没有渲染出可展开块" });
+    await page.close();
+    return;
+  }
+  const startCount = await page.locator("#out details.more").count();
+  await d.locator("summary").click();
+  await d.evaluate((el) => {
+    window.__w = el;
+  });
+  let switched = true;
+  try {
+    await page.waitForFunction(() => !document.contains(window.__w), null, { timeout: 60000 });
+  } catch {
+    switched = false;
+  }
+  const after = await page.evaluate(() => {
+    const all = [...document.querySelectorAll("#out details.more")];
+    return { total: all.length, open: all.filter((el) => el.open).length };
+  });
+  await page.close();
+  results.push({
+    name,
+    simple: true,
+    ok: switched && after.total === 2 && after.open === 1,
+    detail: !switched
+      ? "没等到重渲染"
+      : after.total !== 2
+        ? `答案没有分裂成两个桶（开始 ${startCount} 个，现在 ${after.total} 个），这个用例没测到东西`
+        : `${after.total} 个块中 ${after.open} 个展开${after.open === 1 ? "" : " —— 读者没碰过的那个也开了"}`,
+  });
+}
+
 const { server, base } = live ? { server: null, base: liveBase } : await serve();
 const browser = await chromium.launch();
 
@@ -314,6 +386,7 @@ if (live) {
   await survivesAPoll(browser, base, 1, "details.raw", "traceroute 逐跳");
   await survivesAPoll(browser, base, 2, "details.more", "dns 多地址");
   await doesNotLeakAcrossRuns(browser, base);
+  await reopensExactlyOne(browser, base);
 }
 
 await browser.close();
