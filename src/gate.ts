@@ -75,11 +75,18 @@ export async function releaseCredits(
  * reservation. Without this the two ledgers disagree — the platform is made
  * whole and the caller is charged for a measurement that does not exist.
  */
-export async function refundCredits(env: Env, caller: Caller, credits: number): Promise<void> {
+export async function refundCredits(
+  env: Env,
+  caller: Caller,
+  credits: number,
+  day: string,
+): Promise<void> {
   if (credits <= 0) return;
   await limiter(env, caller).fetch("https://limiter/take", {
     method: "POST",
-    body: JSON.stringify({ tier: caller.tier, type: "refund", credits, refund: true }),
+    // `day` is the ledger the charge landed on. Without it a refund that
+    // crosses the UTC midnight boundary lands on the next day's ledger.
+    body: JSON.stringify({ tier: caller.tier, type: "refund", credits, refund: true, day }),
   });
 }
 

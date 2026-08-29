@@ -12,6 +12,11 @@ export interface TakeRequest {
   credits: number;
   /** Give `credits` back to this caller's daily ledger; the token is not returned. */
   refund?: boolean;
+  /**
+   * The UTC day the charge landed on, echoed back from the `TakeResult` that
+   * charged it. A refund is only valid against that ledger.
+   */
+  day?: string;
   /** Check only — used by GET /quota so a status peek costs nothing. */
   peek?: boolean;
 }
@@ -25,6 +30,8 @@ export interface TakeResult {
   capacity: number;
   creditsUsedToday: number;
   creditsLimit: number;
+  /** The UTC day this charge was recorded against — pass back to refund it. */
+  day: string;
 }
 
 /**
@@ -56,12 +63,28 @@ export class RateLimiter implements DurableObject {
      * targets free.
      */
     if (req.refund) {
-      const day = dayKey(Date.now());
       const rec = await this.state.storage.get<{ day: string; credits: number }>("spent");
-      const spent = rec?.day === day ? rec.credits : 0;
-      const credits = Math.max(0, spent - Math.max(req.credits, 0));
-      await this.state.storage.put("spent", { day, credits });
-      return Response.json({ ok: true, retryAfterSec: 0, remaining: 0, creditsUsedToday: credits, creditsLimit: 0 });
+      // Only against the ledger that was actually charged.
+      //
+      // The first version refunded whatever day it happened to be called on. A
+      // create charged at 23:59:59 and rejected at 00:00:01 then subtracted its
+      // credits from the *new* day — and if the caller had already spent on
+      // that day, the refund handed back allowance nobody had paid for. The
+      // charged day now rides on the TakeResult and comes back here; a refund
+      // whose day has already rolled over is simply dropped, because the ledger
+      // it belonged to is gone and reset to zero anyway.
+      const stale = !req.day || rec?.day !== req.day;
+      const credits = stale ? (rec?.credits ?? 0) : Math.max(0, rec!.credits - Math.max(req.credits, 0));
+      if (!stale) await this.state.storage.put("spent", { day: req.day, credits });
+      return Response.json({
+        ok: true,
+        retryAfterSec: 0,
+        remaining: 0,
+        capacity: 0,
+        creditsUsedToday: credits,
+        creditsLimit: 0,
+        day: rec?.day ?? dayKey(Date.now()),
+      });
     }
 
     const policy = QUOTA[req.tier] ?? QUOTA.anon;
@@ -86,6 +109,7 @@ export class RateLimiter implements DurableObject {
       capacity: spec.capacity,
       creditsUsedToday: spent,
       creditsLimit: policy.dailyCredits,
+      day: today,
     };
 
     if (noTokens) {

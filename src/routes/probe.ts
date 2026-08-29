@@ -159,7 +159,7 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     // And to the caller's own allowance, which `rateCheck` charged before the
     // create was attempted. Both ledgers or neither: billing one side for a
     // measurement that does not exist is the asymmetry this pairs up.
-    if (take?.ok) await refundCredits(env, caller, credits);
+    if (take?.ok) await refundCredits(env, caller, credits, take.day);
     throw err;
   }
 
