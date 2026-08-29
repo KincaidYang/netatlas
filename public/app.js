@@ -675,21 +675,34 @@ function render(report, id) {
     `<button type="button" id="md">复制 Markdown</button>` +
     `<button type="button" id="share">复制链接</button></div>`;
 
-  const body = LATENCY_TYPES.has(report.type) ? latencyView(report, groups) : answerView(report);
-  const detail = view === "table" ? tableView(groups, report.type) : groups.map(sheet).join("");
   // A poll rewrites this whole block every three seconds, so anything the
   // reader had opened — a traceroute's hop list, a long DNS answer — snapped
   // shut under them. That is the same complaint `state.order` above answers
   // for row order: results arrive over minutes, and the reader is mid-sentence.
-  // Keys are content-stable (probe id, answer signature), not positions, so a
-  // node that arrives late reorders without pulling the disclosure with it.
+  //
+  // Read before anything is rebuilt: `answerView` replaces `state.answers`, and
+  // what the reader had open is described by the previous one.
   const opened = new Set(
     [...$("out").querySelectorAll("details[data-k][open]")].map((d) => d.dataset.k),
   );
+  const openedSets = [...opened]
+    .map((k) => state.answers?.get(k))
+    .filter(Boolean);
+
+  const body = LATENCY_TYPES.has(report.type) ? latencyView(report, groups) : answerView(report);
+  const detail = view === "table" ? tableView(groups, report.type) : groups.map(sheet).join("");
   $("out").innerHTML = head + body + detail + cliHint(report, id);
   if (opened.size) {
     for (const d of $("out").querySelectorAll("details[data-k]")) {
-      if (opened.has(d.dataset.k)) d.open = true;
+      // A probe id is already an identity and never changes. An answer is a
+      // growing set, so it is matched by containment instead: the block that
+      // still holds everything the reader was reading is the same block.
+      if (opened.has(d.dataset.k)) {
+        d.open = true;
+        continue;
+      }
+      const recs = state.answers?.get(d.dataset.k);
+      if (recs && openedSets.some((was) => was.every((r) => recs.includes(r)))) d.open = true;
     }
   }
 
@@ -765,6 +778,9 @@ const niceMax = (v) => {
 
 /** For DNS and TLS the headline is disagreement: who saw something different. */
 function answerView(report) {
+  // Rebuilt every render; `render()` holds the previous one long enough to ask
+  // what the reader had open.
+  state.answers = new Map();
   const buckets = new Map();
   for (const g of report.groups) {
     if (g.responded === 0) continue;
@@ -858,25 +874,27 @@ function answerView(report) {
    */
   const INLINE = 3;
   /**
-   * Keyed by the first record, not by the whole answer.
+   * The key names the exact answer; `render()` matches it by containment.
    *
-   * A node's `distinctAnswers` is the union across its probes, so while a run
-   * is still arriving a fifth address joins the four already on screen and the
-   * bucket signature changes — which closed the block the reader had open, the
-   * exact thing `data-k` exists to prevent. Found by review, not by the test:
-   * the fixture answered with a constant list, and a constant cannot grow.
+   * Deriving identity from the content directly does not work, in either of
+   * the two forms tried. The whole answer changes the moment a late probe adds
+   * an address, which is what closed the block the first time. The first record
+   * alone survives an append but not a record that sorts ahead of it — a
+   * `1.1.1.1` arriving after a `2.2.2.2` moves it just the same, and a fixture
+   * that only ever appends higher addresses cannot show that.
    *
-   * The records are sorted, so the first one survives an append and survives
-   * new nodes joining the bucket. A record that sorts ahead of it still moves
-   * the key, and two buckets sharing a first record both reopen — an
-   * over-restore, which costs the reader nothing, where the old key cost them
-   * their place.
+   * So identity is not derived here at all. The set each block is showing is
+   * published alongside its key, and the restore reopens the block whose set
+   * contains what the reader was already reading. Growth in any direction keeps
+   * the place; a genuinely different answer does not inherit it.
    */
   const display = (records) => {
     const parts = strip(records);
     if (parts.length <= INLINE) return esc(parts.join(", "));
+    const k = `ans:${JSON.stringify(records)}`;
+    state.answers.set(k, records);
     return (
-      `<details class="more" data-k="ans:${esc(records[0])}">` +
+      `<details class="more" data-k="${esc(k)}">` +
       `<summary>${parts.length} 个地址 · ${esc(parts[0])} …</summary>` +
       `${esc(parts.join(", "))}</details>`
     );

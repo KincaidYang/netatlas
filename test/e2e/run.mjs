@@ -95,10 +95,15 @@ const stub = {
         // `distinctAnswers` is the union over its probes, and they report at
         // different times. A constant list here is what let a key derived from
         // the whole answer look stable when it was not.
+        // Sorted, and it grows in **both** directions. The first version only
+        // appended higher addresses, so a key derived from the first record
+        // looked stable when it was not — the review had to point that out
+        // because the fixture could not. `A 0.0.0.0` sorts ahead of everything
+        // already on screen, which is exactly the case that broke it.
         distinctAnswers: [
+          ...(counters[2] >= 2 ? ["A 0.0.0.0"] : []),
           "A 1.1.1.1", "A 2.2.2.2", "A 3.3.3.3", "A 4.4.4.4",
           ...(counters[2] >= 2 ? ["A 5.5.5.5"] : []),
-          ...(counters[2] >= 3 ? ["A 6.6.6.6"] : []),
         ],
         ttl: { min: 60, max: 60 }, rttMs: { avg: 12 },
       },
@@ -170,46 +175,60 @@ async function survivesAPoll(browser, base, id, selector, name) {
 
   await first.locator("summary").click();
   const opened = await first.evaluate((el) => el.open);
-  // Track the one we opened by its key, never by its position.
+
+  // Hold the element itself, and the content the reader could see in it.
   //
-  // This is the whole point of the feature and it caught the test out first:
-  // asserting on `selector.first()` after the poll passed against a stub with a
-  // single probe and failed against a real run, because probes that arrive
-  // later sort above the one you opened — `.first()` was then a different,
-  // closed card. A position is exactly what `data-k` exists not to be.
-  const key = await first.evaluate((el) => el.dataset.k);
+  // Not the key. Twice now this harness has assumed the thing it opened keeps
+  // its identifier — first `selector.first()`, a position, then `data-k`, which
+  // an answer changes as it grows. Both assumptions were the same mistake the
+  // feature exists to correct, made by the test that is supposed to police it.
+  //
+  // What the reader actually cares about is that the block still shows what
+  // they were reading. So: remember the tokens on screen, and afterwards look
+  // for an open disclosure that still contains all of them. That is the claim,
+  // stated from outside, with no idea how the page tracks identity.
+  // The disclosed body only — never the summary. The summary restates the
+  // count and the first address ("6 个地址 · 0.0.0.0 …"), both of which change
+  // as the answer grows, and reading it as content invented tokens that could
+  // not survive: with no space before the list, `…1.1.1.1` was one word.
+  const was = await first.evaluate((el) => {
+    window.__watched = el;
+    const body = [...el.childNodes]
+      .filter((n) => n.nodeName !== "SUMMARY")
+      .map((n) => n.textContent)
+      .join(" ");
+    return body.split(/[\s,]+/).filter((t) => t.length > 3);
+  });
 
   // Detect the re-render itself, not a side effect of it.
   //
-  // The first version waited for the "n/m 个探针已回" counter to change, which
+  // An earlier version waited for the "n/m 个探针已回" counter to change, which
   // is only *usually* true: `render()` runs on every poll whether or not the
-  // count moved, and a run where the last probes never answer polls for
-  // minutes without the counter budging. That reported a passing case as a
-  // failure twice. Instead, stamp the live element and wait until the element
-  // at that key is a different object — which is exactly what "innerHTML was
-  // replaced" means, and is what the fix has to survive.
+  // count moved, and a run where the last probes never answer polls for minutes
+  // without the counter budging — reporting two passing cases as failures.
+  // The held node leaving the document is exactly "innerHTML was replaced".
   const before = (await page.locator(".fill").innerText()).trim();
-  await first.evaluate((el) => {
-    el.__beforeRender = true;
-  });
   let polled = true;
   try {
-    await page.waitForFunction(
-      (k) => {
-        const el = document.querySelector(`#out details[data-k="${CSS.escape(k)}"]`);
-        return !!el && !el.__beforeRender;
-      },
-      key,
-      { timeout: 90000 },
-    );
+    await page.waitForFunction(() => !document.contains(window.__watched), null, { timeout: 90000 });
   } catch {
     polled = false;
   }
   const after = (await page.locator(".fill").innerText()).trim();
-  const state = await page.evaluate((k) => {
-    const el = document.querySelector(`#out details[data-k="${CSS.escape(k)}"]`);
-    return { present: !!el, open: !!el?.open };
-  }, key);
+  const state = await page.evaluate((tokens) => {
+    const holds = [...document.querySelectorAll("#out details[data-k]")].filter((el) => {
+      const text = [...el.childNodes]
+        .filter((n) => n.nodeName !== "SUMMARY")
+        .map((n) => n.textContent)
+        .join(" ");
+      return tokens.every((t) => text.includes(t));
+    });
+    return { present: holds.length > 0, open: holds.some((el) => el.open) };
+  }, was);
+  const key = await page.evaluate(() => {
+    const el = [...document.querySelectorAll("#out details[data-k]")].find((d) => d.open);
+    return el ? el.dataset.k : "(无展开)";
+  });
 
   results.push({ name, key, opened, present: state.present, stillOpen: state.open, polled, before, after });
   await page.close();

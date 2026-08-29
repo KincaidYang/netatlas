@@ -193,10 +193,13 @@ describe("what the reader opened survives a poll", () => {
     // `i` is the render index and reorders as results arrive; the probe id and
     // the answer signature do not.
     expect(APP).toContain('data-k="hops:${esc(p.probeId)}"');
-    // The first record, never the whole answer: the answer grows while the run
-    // is still arriving, and a key that grows with it is not a key.
-    expect(APP).toContain('data-k="ans:${esc(records[0])}"');
-    expect(APP).not.toMatch(/data-k="ans:\$\{esc\(key\)\}"/);
+    // The answer key names the exact set; identity is not derived from it.
+    // Both derived forms were wrong — the whole answer moves when a probe adds
+    // an address, the first record moves when one sorts ahead of it — so the
+    // restore matches by containment instead, and that is what is pinned here.
+    expect(APP).toContain("state.answers.set(k, records)");
+    expect(APP).toMatch(/openedSets\.some\(\(was\) => was\.every\(/);
+    expect(APP).not.toContain('data-k="ans:${esc(records[0])}"');
   });
 
   it("render() collects the open keys before it overwrites, and reapplies after", () => {
