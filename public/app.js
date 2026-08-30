@@ -675,9 +675,86 @@ function render(report, id) {
     `<button type="button" id="md">复制 Markdown</button>` +
     `<button type="button" id="share">复制链接</button></div>`;
 
+  // A poll rewrites this whole block every three seconds, so anything the
+  // reader had opened — a traceroute's hop list, a long DNS answer — snapped
+  // shut under them. That is the same complaint `state.order` above answers
+  // for row order: results arrive over minutes, and the reader is mid-sentence.
+  //
+  // Read before anything is rebuilt: `answerView` replaces `state.answers`, and
+  // what the reader had open is described by the previous one.
+  //
+  // Only within one measurement, the way `state.order` scopes itself. Across
+  // runs these keys are not evidence of anything the reader did: repeating a
+  // measurement reuses probes, so the same hop list reappears, and a repeat of
+  // the same query returns the same addresses — both would spring open on a
+  // result nobody had touched.
+  const sameRun = state.shown === id;
+  const opened = new Set(
+    sameRun ? [...$("out").querySelectorAll("details[data-k][open]")].map((d) => d.dataset.k) : [],
+  );
+  const openedSets = [...opened]
+    .map((k) => ({ key: k, records: state.answers?.get(k) }))
+    .filter((e) => e.records);
+
   const body = LATENCY_TYPES.has(report.type) ? latencyView(report, groups) : answerView(report);
   const detail = view === "table" ? tableView(groups, report.type) : groups.map(sheet).join("");
   $("out").innerHTML = head + body + detail + cliHint(report, id);
+  state.shown = id;
+  if (opened.size) {
+    const blocks = [...$("out").querySelectorAll("details[data-k]")];
+    const taken = new Set();
+
+    // A probe id is already an identity and never changes, and an answer that
+    // did not grow still matches its own key. Both are exact, so they go first
+    // and take their block out of the running.
+    for (const d of blocks) {
+      if (opened.has(d.dataset.k)) {
+        d.open = true;
+        taken.add(d);
+      }
+    }
+
+    // What is left is an answer that grew. Containment finds the candidates —
+    // but choosing among them is a matching problem, and this is the third
+    // distinct way this restore has been wrong.
+    //
+    // One disclosure the reader opened must reopen exactly one, so
+    // predecessors compete for successors, and taking the smallest match on
+    // sight can consume the only candidate a later one had. With `X` and `Y`
+    // open and the answers now `X∪Y` and `X∪Z`, `X` takes `X∪Y` for being
+    // smaller and `Y` is left with nothing, though `X→X∪Z, Y→X∪Y` restores
+    // both. Which one loses depends on the order, and the order here is
+    // whatever the previous DOM happened to be in.
+    //
+    // So each predecessor tries its candidates and may ask an incumbent to
+    // move over — the textbook augmenting path. A dozen buckets at the very
+    // most, so the cost is irrelevant and the correctness is not.
+    const pending = openedSets.filter(
+      (was) => !(opened.has(was.key) && blocks.some((d) => d.dataset.k === was.key)),
+    );
+    const fits = pending.map((was) =>
+      blocks.filter((d) => {
+        if (taken.has(d)) return false;
+        const recs = state.answers?.get(d.dataset.k);
+        return recs && was.records.every((r) => recs.includes(r));
+      }),
+    );
+    const heldBy = new Map();
+    const claim = (i, seen) => {
+      for (const d of fits[i]) {
+        if (seen.has(d)) continue;
+        seen.add(d);
+        const incumbent = heldBy.get(d);
+        if (incumbent === undefined || claim(incumbent, seen)) {
+          heldBy.set(d, i);
+          return true;
+        }
+      }
+      return false;
+    };
+    for (let i = 0; i < pending.length; i++) claim(i, new Set());
+    for (const d of heldBy.keys()) d.open = true;
+  }
 
   for (const btn of document.querySelectorAll("[data-view]")) {
     btn.addEventListener("click", () => {
@@ -751,6 +828,9 @@ const niceMax = (v) => {
 
 /** For DNS and TLS the headline is disagreement: who saw something different. */
 function answerView(report) {
+  // Rebuilt every render; `render()` holds the previous one long enough to ask
+  // what the reader had open.
+  state.answers = new Map();
   const buckets = new Map();
   for (const g of report.groups) {
     if (g.responded === 0) continue;
@@ -843,11 +923,29 @@ function answerView(report) {
    * growing with the size of the answer.
    */
   const INLINE = 3;
+  /**
+   * The key names the exact answer; `render()` matches it by containment.
+   *
+   * Deriving identity from the content directly does not work, in either of
+   * the two forms tried. The whole answer changes the moment a late probe adds
+   * an address, which is what closed the block the first time. The first record
+   * alone survives an append but not a record that sorts ahead of it — a
+   * `1.1.1.1` arriving after a `2.2.2.2` moves it just the same, and a fixture
+   * that only ever appends higher addresses cannot show that.
+   *
+   * So identity is not derived here at all. The set each block is showing is
+   * published alongside its key, and the restore reopens the block whose set
+   * contains what the reader was already reading. Growth in any direction keeps
+   * the place; a genuinely different answer does not inherit it.
+   */
   const display = (records) => {
     const parts = strip(records);
     if (parts.length <= INLINE) return esc(parts.join(", "));
+    const k = `ans:${JSON.stringify(records)}`;
+    state.answers.set(k, records);
     return (
-      `<details class="more"><summary>${parts.length} 个地址 · ${esc(parts[0])} …</summary>` +
+      `<details class="more" data-k="${esc(k)}">` +
+      `<summary>${parts.length} 个地址 · ${esc(parts[0])} …</summary>` +
       `${esc(parts.join(", "))}</details>`
     );
   };
@@ -1382,7 +1480,8 @@ function probeBody(p, labelled, odd) {
 
   const dl = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
   const raw = d.hops
-    ? `<details class="raw"><summary>逐跳</summary><pre>${esc(
+    ? `<details class="raw" data-k="hops:${esc(p.probeId)}">` +
+      `<summary>逐跳</summary><pre>${esc(
         d.hops
           .map((h) => {
             // Every hop is probed several times. A hop that answered once out

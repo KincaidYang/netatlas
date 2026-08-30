@@ -8,6 +8,8 @@ import {
   publicDailyCredits,
   sha256Hex,
 } from "../src/quota";
+import { shouldRefund } from "../src/gate";
+import { AtlasClient, noMeasurementCreated } from "../src/atlas";
 import { NODE_PRESETS } from "../src/nodes";
 
 /**
@@ -131,5 +133,57 @@ describe("sha256Hex", () => {
     );
     await expect(sha256Hex("")).resolves.toHaveLength(64);
     expect(await sha256Hex("1.2.3.4")).not.toBe(await sha256Hex("1.2.3.5"));
+  });
+});
+
+/**
+ * The refund decision, which shipped a P1 in the one form it could not be
+ * tested in. Two ways to be wrong in opposite directions: refunding a
+ * measurement that exists bills nobody for a run that is spending, and
+ * withholding from one that does not charges a caller for nothing.
+ */
+describe("shouldRefund", () => {
+  it("returns nothing when nothing was charged", () => {
+    // `rateCheck` failing is what rejects the request; it takes no credits.
+    expect(shouldRefund(false, false, false)).toBe(false);
+    expect(shouldRefund(false, true, true)).toBe(false);
+  });
+
+  it("refunds a failure that never reached Atlas", () => {
+    // The case the first version broke: `rejectBudget()` throws several lines
+    // above the POST, so no measurement can exist, but the error carries no
+    // Atlas rejection marker because Atlas was never asked.
+    expect(shouldRefund(true, false, false)).toBe(true);
+  });
+
+  it("refunds a request Atlas read and refused", () => {
+    expect(shouldRefund(true, true, true)).toBe(true);
+  });
+
+  it("keeps the charge when the POST went out and the outcome is unknown", () => {
+    // A body that would not read, JSON that would not parse, a 5xx, a 2xx with
+    // no id. The measurement may exist and may be spending.
+    expect(shouldRefund(true, true, false)).toBe(false);
+  });
+});
+
+/**
+ * The classification `shouldRefund` depends on. Getting this wrong is invisible
+ * from `shouldRefund`'s own tests, which take the boolean as given — and it has
+ * been wrong twice: once treating a 5xx as proof of refusal, once missing that
+ * the client can fail before it sends anything.
+ */
+describe("noMeasurementCreated", () => {
+  it("is true when the request never left the Worker", async () => {
+    // No key configured — this throws before `fetch`, so no POST exists. A
+    // deployment that lost its secret must not also eat the caller's quota.
+    const err = await new AtlasClient(undefined).createMeasurement({}, []).catch((e) => e);
+    expect(noMeasurementCreated(err)).toBe(true);
+  });
+
+  it("is false for an error carrying no verdict", () => {
+    expect(noMeasurementCreated(new Error("socket hang up"))).toBe(false);
+    expect(noMeasurementCreated(null)).toBe(false);
+    expect(noMeasurementCreated(undefined)).toBe(false);
   });
 });

@@ -9,6 +9,7 @@ import {
   searchNodes,
   type Node,
 } from "./nodes";
+import { groupProbes } from "./probe-grouping";
 
 const ATLAS_PROBES = "https://atlas.ripe.net/api/v2/probes/";
 const RIPESTAT = "https://stat.ripe.net/data/as-overview/data.json";
@@ -241,35 +242,10 @@ export class CatalogCache implements DurableObject {
     // why the filter belongs on `countries` and nowhere else.
     const swept = { probes: all.length, countries: new Set(placed).size };
 
-    const groups = new Map<string, { v4: number; v6: number; v6asn: Map<number, number> }>();
-    for (const probe of all) {
-      const cc = probe.country_code?.toLowerCase();
-      // A node id is `cc-<v4 ASN>`, so a probe without one cannot be addressed
-      // by any node — 188 of Atlas's connected probes are IPv6-only. Keying
-      // them by their v6 ASN instead built groups that resolve to nothing, and
-      // counted them as IPv4 probes of whichever node shares that number: KPN
-      // uses 1136 for both families, so `nl-1136` was credited with probes that
-      // have no IPv4 at all. They remain reachable for `af: 6` on a catalogued
-      // node, which queries by v6 ASN and never consults these counts.
-      const asn = probe.asn_v4;
-      // `?` is Atlas's placeholder for a probe it could not place. A `?-29802`
-      // group would be counted among the pairs the console calls 全部可搜索
-      // and then rejected by `parseNodeId()`, which takes two-letter codes
-      // only — advertised and unselectable, the exact combination the search
-      // box exists to avoid.
-      if (!cc || cc === "?" || !asn) continue;
-      const id = `${cc}-${asn}`;
-      let g = groups.get(id);
-      if (!g) {
-        g = { v4: 0, v6: 0, v6asn: new Map() };
-        groups.set(id, g);
-      }
-      g.v4++;
-      if (probe.asn_v6) {
-        g.v6++;
-        g.v6asn.set(probe.asn_v6, (g.v6asn.get(probe.asn_v6) ?? 0) + 1);
-      }
-    }
+    // The keying rule lives in ./probe-grouping, which scripts/build-nodes.mjs
+    // imports too — the build-time catalogue and this sweep have to describe
+    // the same population or a node's count changes meaning between them.
+    const groups = groupProbes(all);
 
     // Everything, not just what the curated catalogue would show: the search
     // box offers the full set and `merge()` applies the policy on the way out.
@@ -278,10 +254,7 @@ export class CatalogCache implements DurableObject {
       .slice(0, MAX_STORED_GROUPS);
 
     const counts: Counts = {};
-    for (const [id, g] of kept) {
-      const dominantV6 = [...g.v6asn.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-      counts[id] = [g.v4, g.v6, dominantV6];
-    }
+    for (const [id, g] of kept) counts[id] = [g.v4, g.v6, g.asnV6];
 
     const stored = (await this.loadSharded<string>("names", "names")) ?? {};
     // Keep only names an existing group can display. Without this the map only

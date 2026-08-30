@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { aggregate } from "../aggregate";
-import { AtlasClient } from "../atlas";
+import { AtlasClient, noMeasurementCreated } from "../atlas";
 import { buildDescription } from "../describe";
 import {
   QUOTA,
@@ -12,9 +12,11 @@ import {
   rateCheck,
   rejectBudget,
   rejectRate,
+  refundCredits,
   releaseCredits,
   reserveCredits,
   settleMeasurement,
+  shouldRefund,
   type Caller,
 } from "../gate";
 import { kindFor } from "../measurements";
@@ -126,7 +128,8 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
   let credits = 0;
   let measurementId: number;
   let selection: Awaited<ReturnType<typeof resolveNodes>>;
-  let take: Awaited<ReturnType<typeof rateCheck>>;
+  let take: Awaited<ReturnType<typeof rateCheck>> | undefined;
+  let attempted = false;
   try {
     // Reads are public, so node resolution always uses the platform key.
     selection = await resolveNodes(
@@ -150,11 +153,48 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     }
 
     const definition = kind.buildDefinition(params, buildDescription(kind.type, String(body.target ?? "")));
+    // Everything above this line fails with nothing sent to Atlas — a budget
+    // rejection, a definition that would not build. Past it a measurement may
+    // exist that we never heard about, *unless* the client says otherwise:
+    // `createMeasurement` has its own pre-`fetch` check, which this boundary
+    // cannot see from out here, so the error carries that fact itself.
+    attempted = true;
     measurementId = await new AtlasClient(caller.atlasKey).createMeasurement(definition, selection.probes);
   } catch (err) {
+    // Both ledgers get their own chance, and neither gets to hide the failure
+    // that brought us here.
+    //
+    // These used to run in sequence, straight from the `catch`. A BUDGET
+    // Durable Object having a bad minute would then throw out of
+    // `releaseCredits`, skip the caller's refund entirely — the classification
+    // above becoming decorative exactly when it is needed — and replace the
+    // original error with the cleanup's, so the response explained the wrong
+    // problem. `allSettled` because one ledger failing to be tidied is not a
+    // reason to leave the other untouched.
+    //
     // Only give credits back if they were actually reserved — a ticket is
     // proof of that; without one this just hands the claim back.
-    await releaseCredits(env, ticket ? credits : 0, ticket, key);
+    const cleanup = [releaseCredits(env, ticket ? credits : 0, ticket, key)];
+    // And to the caller's own allowance, which `rateCheck` charged before the
+    // create was attempted. Both ledgers or neither: billing one side for a
+    // measurement that does not exist is the asymmetry this pairs up.
+    // Refund unless the measurement might exist.
+    //
+    // Two ways it definitely does not: the failure came before anything was
+    // sent, or Atlas read the request and refused it. Gating on the second
+    // alone was a narrowing that broke the first — a caller whose request was
+    // turned away by the daily budget lost the allowance anyway, for a
+    // measurement that never got near Atlas.
+    //
+    // The remaining window is a POST that was delivered and whose outcome we
+    // never learned. There the charge stands: the platform's ledger survives
+    // that ambiguity because `DailyBudget` reconciles against Atlas every ten
+    // minutes, and the caller's has no such correction, so it is the one that
+    // must not guess.
+    if (take && shouldRefund(take.ok, attempted, noMeasurementCreated(err))) {
+      cleanup.push(refundCredits(env, caller, credits, take.day));
+    }
+    await Promise.allSettled(cleanup);
     throw err;
   }
 
@@ -168,7 +208,7 @@ async function create(env: Env, caller: Caller, body: CreateBody) {
     unavailable: selection.unavailable,
     estimatedCredits: credits,
     billedTo: caller.usingOwnKey ? "your-key" : "public",
-    tokensLeft: take.remaining,
+    tokensLeft: take?.remaining,
   };
 }
 

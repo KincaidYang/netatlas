@@ -31,6 +31,16 @@
  * Run manually (`npm run cities:refresh`) and commit the result.
  */
 import { inflateRawSync } from "node:zlib";
+// The nearest-city rule, imported rather than restated. Node strips the types
+// and runs the module directly, so the coverage report below answers with the
+// exact code src/geo.ts serves — which is what makes it a measurement of what
+// ships rather than of a second implementation that resembles it.
+import {
+  buildIndex,
+  distanceKm,
+  isCountryCentroid,
+  nearestCity,
+} from "../src/geo-math.ts";
 
 const GEONAMES = "https://download.geonames.org/export/dump/cities15000.zip";
 const ATLAS = "https://atlas.ripe.net/api/v2";
@@ -56,15 +66,6 @@ const MATCH_KM = Number(process.env.MATCH_KM ?? 50);
 
 /** Handled entirely by CHINA below; GeoNames rows for these are dropped. */
 const CHINA_CODES = new Set(["CN", "HK", "MO", "TW"]);
-
-/**
- * Mirrors SINGLE_METRO in src/geo.ts. A territory smaller than the match radius
- * is one metro, so a country-level fallback point still names it correctly, and
- * the runtime does name those probes. The coverage report has to agree, or it
- * reports Hong Kong's 12 country-tagged probes as skipped while the shipped
- * code names them — measuring something other than what runs.
- */
-const SINGLE_METRO = new Set(["HK", "MO", "SG"]);
 
 /**
  * 中国城市表 —— 手写,一张表,不分层级。
@@ -275,41 +276,6 @@ function unzipOne(buf) {
   return method === 0 ? body : inflateRawSync(body);
 }
 
-const R = Math.PI / 180;
-function km(aLat, aLon, bLat, bLon) {
-  const x =
-    Math.sin(((bLat - aLat) * R) / 2) ** 2 +
-    Math.cos(aLat * R) * Math.cos(bLat * R) * Math.sin(((bLon - aLon) * R) / 2) ** 2;
-  return 2 * 6371 * Math.asin(Math.sqrt(x));
-}
-
-/**
- * Same rule as src/geo.ts, kept here so the coverage report tells the truth —
- * including the longitude reach, which has to widen towards the poles: a
- * degree of longitude is 111 km at the equator and 39 km at Tromsø.
- */
-const KM_PER_DEGREE = 111.32;
-const lonReach = (lat) =>
-  Math.min(180, Math.ceil(MATCH_KM / (KM_PER_DEGREE * Math.cos(Math.min(89.9, Math.abs(lat) + 0.5) * (Math.PI / 180)))));
-
-function lookup(index, lat, lon, cc) {
-  let best = null;
-  const reach = lonReach(lat);
-  for (let dLat = -1; dLat <= 1; dLat++) {
-    for (let dLon = -reach; dLon <= reach; dLon++) {
-      const lonBucket = ((((Math.floor(lon) + dLon + 180) % 360) + 360) % 360) - 180;
-      for (const row of index.get(`${Math.floor(lat) + dLat},${lonBucket}`) ?? []) {
-        const d = km(lat, lon, row[0], row[1]);
-        if (d > MATCH_KM) continue;
-        if (!best || d < best.d - 0.001 || (Math.abs(d - best.d) <= 0.001 && row[2] === cc)) {
-          best = { d, row };
-        }
-      }
-    }
-  }
-  return best?.row ?? null;
-}
-
 /**
  * cities15000 is not a list of cities — it also carries the pieces big cities
  * are cut into: Tokyo's 目黒 and 中央, London's Islington and Barking,
@@ -344,7 +310,7 @@ function swallowSubdivisions(places) {
       for (let dLon = -1; dLon <= 1 && !swallowed; dLon++) {
         for (const other of cells.get(`${Math.floor(p.lat) + dLat},${Math.floor(p.lon) + dLon}`) ?? []) {
           if (other === p || other.cc !== p.cc || other.pop < p.pop * SWALLOW_RATIO) continue;
-          if (km(p.lat, p.lon, other.lat, other.lon) <= SWALLOW_KM) {
+          if (distanceKm(p.lat, p.lon, other.lat, other.lon) <= SWALLOW_KM) {
             swallowed = true;
             break;
           }
@@ -395,12 +361,7 @@ const main = async () => {
 
   // Coverage report: how many real probes this table can actually name. Free —
   // one sweep of Atlas, no credits, no measurement.
-  const index = new Map();
-  for (const [lat, lon, cc, name] of cities) {
-    const key = `${Math.floor(lat / 1e4)},${Math.floor(lon / 1e4)}`;
-    if (!index.has(key)) index.set(key, []);
-    index.get(key).push([lat / 1e4, lon / 1e4, cc, name]);
-  }
+  const index = buildIndex(cities);
   const probes = await atlasProbes();
   const tally = { total: 0, named: 0, cnTotal: 0, cnNamed: 0, countryOnly: 0 };
   const missed = [];
@@ -410,16 +371,13 @@ const main = async () => {
     const china = CHINA_CODES.has(p.country_code);
     // These 500 probes are geolocated to a country centroid, not a place.
     // Naming them would be inventing a fact.
-    const centroid =
-      (p.tags ?? []).some((t) => t.slug === "system-auto-geoip-country") &&
-      !SINGLE_METRO.has(p.country_code);
-    if (centroid) {
+    if (isCountryCentroid(p.tags, p.country_code)) {
       tally.countryOnly++;
       continue;
     }
     tally.total++;
     if (china) tally.cnTotal++;
-    const hit = lookup(index, lat, lon, p.country_code);
+    const hit = nearestCity(index, lat, lon, p.country_code, MATCH_KM);
     if (hit) {
       tally.named++;
       if (china) tally.cnNamed++;

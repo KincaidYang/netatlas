@@ -68,6 +68,55 @@ export async function releaseCredits(
   await budget(env).fetch(`https://budget/release?${q}`);
 }
 
+/**
+ * Creation failed: return the credits to this caller's daily allowance.
+ *
+ * The counterpart to `releaseCredits`, which returns the platform's global
+ * reservation. Without this the two ledgers disagree — the platform is made
+ * whole and the caller is charged for a measurement that does not exist.
+ */
+/**
+ * Whether a failed create should hand the caller's credits back.
+ *
+ * Pulled out of the `catch` so it can be tested, because the version inside it
+ * could not be and shipped a P1: gating on "Atlas refused" alone denied the
+ * refund to a caller rejected by the daily budget, whose request never reached
+ * Atlas at all. This is billing code with two ways to be wrong in opposite
+ * directions, which is the worst possible shape to leave unexamined.
+ *
+ * - `charged` — `rateCheck` actually took the credits. Nothing to return if not.
+ * - `attempted` — the create call was reached. Before it, nothing can exist.
+ * - `provablyNotCreated` — the error itself proves nothing was made: the request
+ *   never left the Worker, or Atlas read it and refused it with a 4xx. This is
+ *   what covers the failures inside the create call that `attempted` is too
+ *   coarse to see, such as a missing API key throwing before `fetch`.
+ *
+ * The gap left open on purpose is a delivered POST with an unknown outcome: the
+ * measurement may exist and be spending, so the charge stands. The platform's
+ * own ledger tolerates that because `DailyBudget` reconciles against Atlas;
+ * the caller's cannot, so it is the one that must not guess.
+ */
+export const shouldRefund = (
+  charged: boolean,
+  attempted: boolean,
+  provablyNotCreated: boolean,
+): boolean => charged && (!attempted || provablyNotCreated);
+
+export async function refundCredits(
+  env: Env,
+  caller: Caller,
+  credits: number,
+  day: string,
+): Promise<void> {
+  if (credits <= 0) return;
+  await limiter(env, caller).fetch("https://limiter/take", {
+    method: "POST",
+    // `day` is the ledger the charge landed on. Without it a refund that
+    // crosses the UTC midnight boundary lands on the next day's ledger.
+    body: JSON.stringify({ tier: caller.tier, type: "refund", credits, refund: true, day }),
+  });
+}
+
 /** Creation succeeded: name the in-flight slot after the measurement and publish it for de-duplication. */
 export async function markCreated(
   env: Env,

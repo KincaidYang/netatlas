@@ -160,8 +160,15 @@ against `status=1`, then emits one `{type:"probes"}` group per node.
   no IPv4 — KPN uses 1136 for both families, so `nl-1136` counted them, and
   `de-3320` advertised 316 where it has 310. Those probes stay reachable for
   `af: 6` on a catalogued node, which queries by v6 ASN and never reads these
-  counts. Both sweeps do this; `scripts/build-nodes.mjs` and `src/catalog.ts`
-  must agree.
+  counts. Both sweeps do this, and they no longer each say so: the rule is
+  `groupProbes()` in **`src/probe-grouping.ts`**, which `src/catalog.ts` and
+  `scripts/build-nodes.mjs` both import. Node runs the `.ts` from the `.mjs`
+  directly (native type stripping — no loader, no build step), so keep that
+  module erasable-syntax-only: no `enum`, no `namespace`, no parameter
+  properties. Stripping is unflagged only from **Node 22.18**, which
+  `package.json` now declares in `engines`: on Node 20 both `nodes:refresh`
+  and `cities:refresh` die with `ERR_UNKNOWN_FILE_EXTENSION`, and the import
+  fails before any code in the script can explain why.
 - **A batch that fails mid-pagination is retried from page one**, so probes
   already collected arrive a second time. Pools are deduplicated before they
   are counted or sampled — otherwise `available` inflates (600 reported as
@@ -217,9 +224,15 @@ So `data/cities.json` is ours, baked by `npm run cities:refresh`:
   that test is load-bearing: Kehl (DE, 35k) is 5 km from Strasbourg (FR, 274k),
   and merging across the border makes a German probe report a French city.
   Coverage is 96.7% of nameable probes, 100% in China.
-- The coverage report in the build script **mirrors the runtime rules on
-  purpose** — the same match radius, the same longitude reach, the same
-  `SINGLE_METRO` exception. When they drift it stops measuring what ships.
+- The coverage report in the build script runs **the runtime rule itself** —
+  `nearestCity()` in **`src/geo-math.ts`**, imported by both `src/geo.ts` and
+  `scripts/build-cities.mjs`, along with the match radius, the longitude reach
+  and the `SINGLE_METRO` exception. It used to be a second copy that "mirrors"
+  it, and the copies had already drifted: on a tie the script moved to any row
+  in the probe's country, where the runtime moves only when the incumbent is
+  not already in it. Narrow, but it meant the coverage number described a
+  lookup that did not ship. Same erasable-syntax-only constraint as
+  `src/probe-grouping.ts`.
 - **The GeoNames credit is a licence obligation, not decoration.** cities15000
   is CC BY 4.0 and `data/cities.json` redistributes a derived copy, so the
   attribution travels in the file itself and appears in the console footer. It
@@ -336,12 +349,19 @@ thrown as `QuotaError` (which carries its own `Response`), because Hono's
   `latencyView`'s own comment said comparing is the entire job. The API keeps
   its stable order: that order is part of what a shared `/m/<id>` returns.
 - **An outlier may reorder and highlight, never hide.** A node far from its
-  peers moves up and its number turns red. Folding "unremarkable" cards was
+  peers moves up and its number turns red — far meaning **3x the baseline and
+  100 ms above it**, both conditions, per probe as well as per group. The ratio
+  alone reddens a probe 30 ms from its peers; the gap alone reddens every slow
+  but consistent node. `test/console.test.ts` holds these numbers against the
+  code, along with the others stated here — an hour of clock staleness and
+  fourteen days of certificate — because three times on this branch a comment
+  of mine described behaviour the code did not have. Folding "unremarkable" cards was
   tried and removed: the rule for what counts as unremarkable was invented
   here, and a bad sort costs an awkward order while a bad fold costs the thing
   the reader came to find. Length is solved by the table view instead, where
   the reader picks the density — cards up to twelve nodes, table beyond, and an
-  explicit choice sticks.
+  explicit choice sticks. That threshold decides which view opens, never what
+  exists in it.
 - **Fold the answer, never the probe.** When every probe in a node returns the
   same records, print them once — six nodes were repeating the same three
   Cloudflare addresses thirty-six times. Each probe keeps its own line with its
@@ -377,6 +397,8 @@ data/nodes.json        generated node catalogue + label tables + policy
 data/cities.json       generated coordinate → city-name table
 scripts/build-nodes.mjs  regenerates data/nodes.json from live Atlas data
 scripts/build-cities.mjs regenerates data/cities.json (China by hand, rest GeoNames)
+                         both import the shared rules below, so a build cannot
+                         describe a different population from the runtime
 
 src/index.ts           route assembly, error handling, DO exports, cron
 src/routes/probe.ts    create + results + the quota chain, in that order
@@ -393,6 +415,8 @@ src/aggregate.ts       group results by node, delegate parsing to the kind
 src/dns.ts             base64 abuf → records
 src/x509.ts            DER → certificate fields
 src/geo.ts             probe coordinates → city name
+src/geo-math.ts        the nearest-city rule — shared with build-cities.mjs
+src/probe-grouping.ts  probes → cc-asn groups — shared with build-nodes.mjs
 src/describe.ts        the Atlas-side label (cosmetic)
 
 test/                  vitest; fixtures are real captured data, see below
@@ -404,6 +428,22 @@ test/fixtures/*.pem    certificates for the DER reader
 `npm test` runs vitest over the pure functions — parsing, validation, quota
 arithmetic, aggregation. Nothing there touches the network or a Workers
 runtime, so it is safe to run in a loop and costs no credits.
+
+**A ledger is not a pure function, and pretending otherwise cost a P1.**
+Whether a refund lands on the day it was charged is a question about two
+`put`s and the clock between them; it cannot be lifted out and called. That
+behaviour was argued in review three times and demonstrated none, and the
+bug that shipped was in exactly the untested half. `npm run test:workers`
+runs `RateLimiter` and `DailyBudget` in a real `workerd` with the real
+bindings — the refund landing on the right day, a stale refund being dropped
+rather than helping itself to a fresh ledger, a release returning both the
+credits and the in-flight slot, and one de-duplication claim going to one
+caller. It stays a separate command so the pure suite keeps the property
+that makes it worth running constantly.
+
+`test/workers/env.d.ts` points `Cloudflare.Env` at the Worker's own `Env`
+instead of restating the bindings, so a binding renamed in `wrangler.jsonc`
+fails to compile rather than arriving as `undefined` mid-test.
 
 The fixtures are real, not synthesised, because both parsers exist to survive
 what the wire actually contains:
@@ -455,6 +495,14 @@ and `POST` for http (which can only target anchors anyway).
 
 - `npm run dev` — `wrangler dev` (needs `.dev.vars` with `ATLAS_API_KEY`)
 - `npm test` — vitest, pure functions only (no Workers pool, no network)
+- `npm run test:workers` — the Durable Object ledgers in a real `workerd`, via
+  `@cloudflare/vitest-pool-workers`, reading the bindings from `wrangler.jsonc`.
+  Local, offline, no credits. Kept out of `npm test` because it boots a runtime
+- `npm run test:e2e` — browser regression for the console, against a real
+  Chromium. Stubbed by default (no Atlas key, no credits); pass a base URL and
+  a **still-running** measurement id to run the same assertions against live
+  data. Needs `npx playwright install chromium` once. Kept out of `npm test` so
+  that stays pure and loopable
 - `npm run typecheck` — `tsc --noEmit`, covers `test/` too
 - `npm run nodes:refresh` — regenerate `data/nodes.json`, then commit it
 - `npm run cities:refresh` — regenerate `data/cities.json`, then commit it. Prints
