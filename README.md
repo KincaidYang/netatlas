@@ -4,7 +4,7 @@
 [RIPE Atlas](https://atlas.ripe.net/)。选几个「地区 × 运营商」的节点,对一个域名或
 IP 发起一次性测量,结果按节点分组返回。
 
-**公开、无需登录、无数据库。** 线上:<https://probe.ddnsip.cn>
+**公开、无需登录、无数据库。** 线上:<https://probe.as205794.net>
 
 六种测量类型:**ping · dns · traceroute · sslcert · http · ntp**
 
