@@ -429,6 +429,22 @@ test/fixtures/*.pem    certificates for the DER reader
 arithmetic, aggregation. Nothing there touches the network or a Workers
 runtime, so it is safe to run in a loop and costs no credits.
 
+**A ledger is not a pure function, and pretending otherwise cost a P1.**
+Whether a refund lands on the day it was charged is a question about two
+`put`s and the clock between them; it cannot be lifted out and called. That
+behaviour was argued in review three times and demonstrated none, and the
+bug that shipped was in exactly the untested half. `npm run test:workers`
+runs `RateLimiter` and `DailyBudget` in a real `workerd` with the real
+bindings — the refund landing on the right day, a stale refund being dropped
+rather than helping itself to a fresh ledger, a release returning both the
+credits and the in-flight slot, and one de-duplication claim going to one
+caller. It stays a separate command so the pure suite keeps the property
+that makes it worth running constantly.
+
+`test/workers/env.d.ts` points `Cloudflare.Env` at the Worker's own `Env`
+instead of restating the bindings, so a binding renamed in `wrangler.jsonc`
+fails to compile rather than arriving as `undefined` mid-test.
+
 The fixtures are real, not synthesised, because both parsers exist to survive
 what the wire actually contains:
 
@@ -479,6 +495,9 @@ and `POST` for http (which can only target anchors anyway).
 
 - `npm run dev` — `wrangler dev` (needs `.dev.vars` with `ATLAS_API_KEY`)
 - `npm test` — vitest, pure functions only (no Workers pool, no network)
+- `npm run test:workers` — the Durable Object ledgers in a real `workerd`, via
+  `@cloudflare/vitest-pool-workers`, reading the bindings from `wrangler.jsonc`.
+  Local, offline, no credits. Kept out of `npm test` because it boots a runtime
 - `npm run test:e2e` — browser regression for the console, against a real
   Chromium. Stubbed by default (no Atlas key, no credits); pass a base URL and
   a **still-running** measurement id to run the same assertions against live
