@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 interface Take {
   ok: boolean;
+  reason?: string;
   creditsUsedToday: number;
   creditsLimit: number;
   day: string;
@@ -83,14 +84,29 @@ describe("RateLimiter daily ledger", () => {
   it("does not return the token, only the credits", async () => {
     // A rejected request still made the Worker resolve nodes against Atlas.
     // Refunding the token would make a flood of bad targets free.
+    //
+    // The bucket has to be empty for this to mean anything. My first version
+    // took twice against a capacity of five and then checked the credits — it
+    // would have passed just as happily if the refund handed tokens back, which
+    // is the whole property it claimed to cover. Found in review; a test that
+    // cannot fail is worse than none, because it also stops anyone looking.
     const who = crypto.randomUUID();
-    const first = await call(who, { credits: 3 });
-    const before = first.ok;
-    const charged = await call(who, { credits: 3 });
-    await call(who, { credits: 3, refund: true, day: charged.day });
-    const peek = await call(who, { credits: 0, peek: true });
-    expect(before).toBe(true);
-    // Two takes happened; the refund gave credits back but not the tokens.
-    expect(peek.creditsUsedToday).toBe(3);
+    const spec = { capacity: 5 }; // QUOTA.anon.job
+    let last!: Take;
+    for (let i = 0; i < spec.capacity; i++) last = await call(who, { credits: 3 });
+    expect(last.ok).toBe(true);
+
+    const empty = await call(who, { credits: 3 });
+    expect(empty.ok).toBe(false);
+    expect(empty.reason).toBe("rate");
+
+    // Refund everything the bucket ever charged.
+    await call(who, { credits: 3 * spec.capacity, refund: true, day: last.day });
+    expect((await call(who, { credits: 0, peek: true })).creditsUsedToday).toBe(0);
+
+    // Credits are back; the token is not. A real take, not a peek.
+    const again = await call(who, { credits: 3 });
+    expect(again.ok).toBe(false);
+    expect(again.reason).toBe("rate");
   });
 });
