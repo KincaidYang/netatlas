@@ -714,32 +714,46 @@ function render(report, id) {
       }
     }
 
-    // What is left is an answer that grew. Containment finds it — but one
-    // disclosure the reader opened must reopen exactly one, and the predicate
-    // alone does not say that: with one node still on `[A,B,C,D]` and another
-    // grown to `[A,B,C,D,E]`, both contain what was open and both sprang open.
-    // I had called that over-restore harmless twice; it puts a node's answer on
-    // screen expanded that the reader never touched. The smallest superset is
-    // the successor — anything larger contains it too, and would be claimed by
-    // its own predecessor if it had one.
-    for (const was of openedSets) {
-      if (opened.has(was.key) && blocks.some((d) => d.dataset.k === was.key)) continue;
-      let best = null;
-      let bestSize = Infinity;
-      for (const d of blocks) {
-        if (taken.has(d)) continue;
+    // What is left is an answer that grew. Containment finds the candidates —
+    // but choosing among them is a matching problem, and this is the third
+    // distinct way this restore has been wrong.
+    //
+    // One disclosure the reader opened must reopen exactly one, so
+    // predecessors compete for successors, and taking the smallest match on
+    // sight can consume the only candidate a later one had. With `X` and `Y`
+    // open and the answers now `X∪Y` and `X∪Z`, `X` takes `X∪Y` for being
+    // smaller and `Y` is left with nothing, though `X→X∪Z, Y→X∪Y` restores
+    // both. Which one loses depends on the order, and the order here is
+    // whatever the previous DOM happened to be in.
+    //
+    // So each predecessor tries its candidates and may ask an incumbent to
+    // move over — the textbook augmenting path. A dozen buckets at the very
+    // most, so the cost is irrelevant and the correctness is not.
+    const pending = openedSets.filter(
+      (was) => !(opened.has(was.key) && blocks.some((d) => d.dataset.k === was.key)),
+    );
+    const fits = pending.map((was) =>
+      blocks.filter((d) => {
+        if (taken.has(d)) return false;
         const recs = state.answers?.get(d.dataset.k);
-        if (!recs || recs.length >= bestSize) continue;
-        if (was.records.every((r) => recs.includes(r))) {
-          best = d;
-          bestSize = recs.length;
+        return recs && was.records.every((r) => recs.includes(r));
+      }),
+    );
+    const heldBy = new Map();
+    const claim = (i, seen) => {
+      for (const d of fits[i]) {
+        if (seen.has(d)) continue;
+        seen.add(d);
+        const incumbent = heldBy.get(d);
+        if (incumbent === undefined || claim(incumbent, seen)) {
+          heldBy.set(d, i);
+          return true;
         }
       }
-      if (best) {
-        best.open = true;
-        taken.add(best);
-      }
-    }
+      return false;
+    };
+    for (let i = 0; i < pending.length; i++) claim(i, new Set());
+    for (const d of heldBy.keys()) d.open = true;
   }
 
   for (const btn of document.querySelectorAll("[data-view]")) {

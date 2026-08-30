@@ -202,7 +202,10 @@ describe("what the reader opened survives a poll", () => {
     // predicate alone reopened every bucket that happened to contain what was
     // open, which expands answers the reader never touched.
     expect(APP).toMatch(/was\.records\.every\(\(r\) => recs\.includes\(r\)\)/);
-    expect(APP).toContain("taken.add(best)");
+    // One successor each, decided by matching rather than by first-come:
+    // greedy assignment starves a predecessor whose only candidate was taken.
+    expect(APP).toContain("heldBy.set(d, i)");
+    expect(APP).toMatch(/claim\(incumbent, seen\)/);
     expect(APP).not.toContain('data-k="ans:${esc(records[0])}"');
   });
 

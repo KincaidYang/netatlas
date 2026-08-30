@@ -71,7 +71,7 @@ const hops = (n) =>
  * tick is a real re-render — the thing under test. A fixture that returned a
  * finished measurement would render once and prove nothing.
  */
-const counters = { 1: 0, 2: 0, 3: 0, 4: 0 };
+const counters = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
 const stub = {
   1: () => ({
     measurementId: 1, type: "traceroute", target: "example.com", queryType: null,
@@ -122,6 +122,33 @@ const stub = {
       measurementId: 4, type: "dns", target: "two.example", queryType: "A",
       status: "Ongoing", totalRequested: 9, totalResponded: n,
       groups: [group("cn-4134", "中国 · 电信", base), group("hk-4760", "香港 · HKT", grown)],
+    };
+  },
+  // Two disclosures open at once, whose successors compete.
+  //
+  // Before: `X` and `Y`, two buckets. After: `X∪Y` and `X∪Z`. `X` fits both,
+  // `Y` fits only `X∪Y`, and `X∪Y` is the smaller of the two — so taking the
+  // smallest match on sight gives it to `X` and leaves `Y` with nothing, while
+  // `X→X∪Z, Y→X∪Y` restores both. Greedy loses one; matching keeps both.
+  5: () => {
+    const n = ++counters[5];
+    const X = ["A 10.0.0.1", "A 10.0.0.2", "A 10.0.0.3", "A 10.0.0.4"];
+    const Y = ["A 20.0.0.1", "A 20.0.0.2", "A 20.0.0.3", "A 20.0.0.4"];
+    const Z = Array.from({ length: 9 }, (_, i) => `A 30.0.0.${i + 1}`);
+    const a = n >= 2 ? [...X, ...Y] : X;
+    const b = n >= 2 ? [...X, ...Z] : Y;
+    const group = (key, label, answers, probeId) => ({
+      key, label, requested: 1, responded: 1,
+      summary: { distinctAnswers: [...answers].sort(), ttl: { min: 60, max: 60 }, rttMs: { avg: 12 } },
+      probes: [{
+        probeId, ok: true, rttMs: 12, city: "北京", asn: 4134, country: "CN",
+        detail: { answers: answers.map((r) => ({ type: "A", data: r.split(" ")[1], ttl: 60 })) },
+      }],
+    });
+    return {
+      measurementId: 5, type: "dns", target: "compete.example", queryType: "A",
+      status: "Ongoing", totalRequested: 9, totalResponded: n,
+      groups: [group("cn-4134", "中国 · 电信", a, 5001), group("hk-4760", "香港 · HKT", b, 5002)],
     };
   },
   2: () => ({
@@ -376,6 +403,62 @@ async function reopensExactlyOne(browser, base) {
   });
 }
 
+/**
+ * Two open disclosures whose successors compete must both come back.
+ *
+ * The one-to-one rule and the "keep the reader's place" rule pull against each
+ * other here: assign greedily and one of the two is silently dropped. Nothing
+ * in the earlier cases could show it — they open a single disclosure, and a
+ * single predecessor never competes with anyone.
+ */
+async function restoresCompetingSets(browser, base) {
+  const name = "两个展开互相竞争时都还原";
+  const page = await browser.newPage();
+  await stubRoutes(page);
+  await page.goto(`${base}/?m=5`);
+  try {
+    await page.locator("#out details.more").first().waitFor({ timeout: 30000 });
+  } catch {
+    results.push({ name, simple: true, ok: false, detail: "没有渲染出可展开块" });
+    await page.close();
+    return;
+  }
+  const before = await page.locator("#out details.more").count();
+  if (before !== 2) {
+    results.push({ name, simple: true, ok: false, detail: `开始应该有 2 个块，实际 ${before} 个` });
+    await page.close();
+    return;
+  }
+  for (let i = 0; i < 2; i++) await page.locator("#out details.more").nth(i).locator("summary").click();
+  const openedBoth = await page.evaluate(() => {
+    const all = [...document.querySelectorAll("#out details.more")];
+    window.__w = all[0];
+    return all.filter((el) => el.open).length;
+  });
+  let switched = true;
+  try {
+    await page.waitForFunction(() => !document.contains(window.__w), null, { timeout: 60000 });
+  } catch {
+    switched = false;
+  }
+  const after = await page.evaluate(() => {
+    const all = [...document.querySelectorAll("#out details.more")];
+    return { total: all.length, open: all.filter((el) => el.open).length };
+  });
+  await page.close();
+  results.push({
+    name,
+    simple: true,
+    ok: openedBoth === 2 && switched && after.total === 2 && after.open === 2,
+    detail:
+      openedBoth !== 2
+        ? `只点开了 ${openedBoth} 个`
+        : !switched
+          ? "没等到重渲染"
+          : `${after.total} 个块中 ${after.open} 个展开${after.open === 2 ? "" : " —— 有一个被饿死了"}`,
+  });
+}
+
 const { server, base } = live ? { server: null, base: liveBase } : await serve();
 const browser = await chromium.launch();
 
@@ -387,6 +470,7 @@ if (live) {
   await survivesAPoll(browser, base, 2, "details.more", "dns 多地址");
   await doesNotLeakAcrossRuns(browser, base);
   await reopensExactlyOne(browser, base);
+  await restoresCompetingSets(browser, base);
 }
 
 await browser.close();
